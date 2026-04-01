@@ -4,10 +4,12 @@ import android.app.Activity
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -32,17 +34,29 @@ fun KioskScreen(
     onNavigateToMessages: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToCharging: () -> Unit,
-    onLogout: () -> Unit,
     viewModel: KioskViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context as? Activity
+    var showExitDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (activity != null) {
             viewModel.activateFullKiosk(activity)
         }
+    }
+
+    if (showExitDialog) {
+        ExitKioskPinDialog(
+            onDismiss = { showExitDialog = false },
+            onPinCorrect = {
+                showExitDialog = false
+                if (activity != null) {
+                    viewModel.deactivateKiosk(activity)
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -61,7 +75,10 @@ fun KioskScreen(
                             color = if (uiState.kioskActive)
                                 MaterialTheme.colorScheme.primary
                             else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            modifier = Modifier.clickable(
+                                enabled = uiState.kioskActive
+                            ) { showExitDialog = true }
                         )
                     }
                 },
@@ -162,6 +179,149 @@ fun KioskScreen(
             }
         }
     }
+}
+
+private const val EXIT_PIN = "1234"
+private const val PIN_LENGTH = 4
+
+@Composable
+private fun ExitKioskPinDialog(
+    onDismiss: () -> Unit,
+    onPinCorrect: () -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        title = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Exit Kiosk Mode",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Enter admin PIN to exit",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    repeat(PIN_LENGTH) { index ->
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (index < pin.length)
+                                        if (error) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant
+                                )
+                        )
+                    }
+                }
+
+                if (error) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Incorrect PIN",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                val keys = listOf(
+                    listOf("1", "2", "3"),
+                    listOf("4", "5", "6"),
+                    listOf("7", "8", "9"),
+                    listOf("", "0", "⌫")
+                )
+                keys.forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        row.forEach { key ->
+                            if (key.isEmpty()) {
+                                Spacer(modifier = Modifier.size(56.dp))
+                            } else {
+                                FilledTonalButton(
+                                    onClick = {
+                                        error = false
+                                        if (key == "⌫") {
+                                            if (pin.isNotEmpty()) pin = pin.dropLast(1)
+                                        } else if (pin.length < PIN_LENGTH) {
+                                            val newPin = pin + key
+                                            pin = newPin
+                                            if (newPin.length == PIN_LENGTH) {
+                                                if (newPin == EXIT_PIN) {
+                                                    onPinCorrect()
+                                                } else {
+                                                    error = true
+                                                    pin = ""
+                                                }
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.size(56.dp),
+                                    shape = CircleShape,
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    if (key == "⌫") {
+                                        Icon(
+                                            imageVector = Icons.Default.Backspace,
+                                            contentDescription = "Delete",
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    } else {
+                                        Text(
+                                            text = key,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

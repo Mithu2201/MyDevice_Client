@@ -17,35 +17,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.mydevice.data.local.preferences.AppPreferences
-import kotlinx.coroutines.flow.first
 import org.koin.androidx.compose.koinViewModel
-import org.koin.compose.koinInject
 
 /**
  * Splash / Device Registration screen.
  *
  * VISUAL FLOW:
  * 1. Shows app icon + "MyDevice" branding with loading spinner
- * 2. If already registered → auto-navigates to main (check-in or kiosk)
+ * 2. If already registered → auto-navigates to kiosk dashboard
  * 3. If not registered → slides in a company code input card
  * 4. User enters code → shows registering state → navigates on success
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SplashScreen(
-    onNavigateToCheckIn: () -> Unit,
     onNavigateToKiosk: () -> Unit,
     viewModel: SplashViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val appPrefs: AppPreferences = koinInject()
     var companyCode by remember { mutableStateOf("") }
 
     LaunchedEffect(uiState.navigateToMain) {
         if (uiState.navigateToMain) {
-            val showCheckIn = appPrefs.showCheckInView.first()
-            if (showCheckIn) onNavigateToCheckIn() else onNavigateToKiosk()
+            onNavigateToKiosk()
         }
     }
 
