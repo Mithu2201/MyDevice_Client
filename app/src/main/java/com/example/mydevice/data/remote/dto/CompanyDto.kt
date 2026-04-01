@@ -4,9 +4,15 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class AddDeviceToCompanyRequest(
-    val macAddress: String,
-    val companyCode: String,
-    val deviceModel: String? = null
+    val companyId: Int,
+    val deviceId: String
+)
+
+@Serializable
+data class ApiSuccessResponse<T>(
+    val success: Boolean = false,
+    val message: String? = null,
+    val data: T? = null
 )
 
 @Serializable

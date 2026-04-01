@@ -4,6 +4,7 @@ import com.example.mydevice.data.remote.dto.*
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.*
 import io.ktor.http.*
 
@@ -15,8 +16,15 @@ class MyDevicesApi(private val client: HttpClient) {
 
     // ──────────────────────────── Authentication ────────────────────────────
 
-    /** POST api/Authentication/login — PIN-based device login */
-    suspend fun login(request: LoginRequest): LoginResponse =
+    /** POST api/Authentication/login — PIN-based user login */
+    suspend fun login(request: LoginRequest): ApiSuccessResponse<LoginResponse> =
+        client.post("api/Authentication/login") {
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.body()
+
+    /** POST api/Authentication/login — device/service login for kiosk SignalR */
+    suspend fun deviceLogin(request: DeviceLoginRequest): ApiSuccessResponse<LoginResponse> =
         client.post("api/Authentication/login") {
             contentType(ContentType.Application.Json)
             setBody(request)
@@ -26,11 +34,19 @@ class MyDevicesApi(private val client: HttpClient) {
     suspend fun getUsersByCompany(companyId: Int): List<UserDto> =
         client.get("api/Users/$companyId").body()
 
+    /** GET api/Message/GetMessages — fallback inbox sync for a device */
+    suspend fun getMessagesRaw(deviceId: Int, page: Int = 1, limit: Int = 50): String =
+        client.get("api/Message/GetMessages") {
+            parameter("DeviceId", deviceId)
+            parameter("Page", page)
+            parameter("Limit", limit)
+        }.bodyAsText()
+
     // ──────────────────────────── Company / Licensee ────────────────────────
 
-    /** POST api/Company/AddDeviceToCompanyByCompanyCode — register device with company code */
-    suspend fun addDeviceToCompany(request: AddDeviceToCompanyRequest): CompanyResponse =
-        client.post("api/Company/AddDeviceToCompanyByCompanyCode") {
+    /** POST api/Company/AddDeviceToCompany — register device with company id */
+    suspend fun addDeviceToCompany(request: AddDeviceToCompanyRequest): ApiSuccessResponse<Unit> =
+        client.post("api/Company/AddDeviceToCompany") {
             contentType(ContentType.Application.Json)
             setBody(request)
         }.body()

@@ -1,10 +1,13 @@
 package com.example.mydevice
 
 import android.os.Bundle
-import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
@@ -49,6 +52,7 @@ class MainActivity : ComponentActivity() {
         private set
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var signalRCollectorsStarted = false
 
     companion object {
         private const val TAG = "MainActivity"
@@ -60,6 +64,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         dpmHelper = DevicePolicyHelper(this)
+
+        // Block the back button for kiosk mode using the modern dispatcher API.
+        // OnBackPressedCallback replaces the deprecated onBackPressed() override
+        // and requires no super call.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                // Intentionally empty — back is disabled in kiosk mode.
+            }
+        })
 
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
@@ -95,22 +108,23 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) enableImmersiveMode()
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        // Block back button in kiosk mode — do nothing
-    }
-
     // ── Immersive Mode ──────────────────────────────────────────────────────
 
     private fun enableImmersiveMode() {
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            )
+        // Tell the framework that our app handles its own insets so the window
+        // extends edge-to-edge (required before hiding bars on API 30+).
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            // Hide both the status bar (top) and the navigation bar (bottom).
+            hide(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars())
+
+            // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: if the user swipes from
+            // the edge the bars briefly appear then auto-hide again — preventing
+            // permanent re-show while still allowing emergency swipe-out.
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 
     // ── Device Admin / Kiosk Setup ──────────────────────────────────────────
@@ -180,13 +194,30 @@ class MainActivity : ComponentActivity() {
                 if (isRegistered) {
                     val deviceId = try { deviceRepo?.getDeviceId() ?: "" } catch (_: Exception) { "" }
                     if (deviceId.isNotBlank()) {
-                        hubConnection?.connect(deviceId)
-                        collectSignalRMessages()
+                        if (hubConnection?.isConnected() != true) {
+                            hubConnection?.connect(deviceId)
+                        }
+                        if (!signalRCollectorsStarted) {
+                            collectSignalRMessages()
+                            signalRCollectorsStarted = true
+                        }
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to start SignalR", e)
             }
+        }
+    }
+
+    /**
+     * Reconnect SignalR after any auth state change so the hub picks up the
+     * latest token if one exists, or falls back to anonymous hub mode.
+     */
+    fun refreshSignalRConnection() {
+        try { hubConnection?.disconnect() } catch (_: Exception) {}
+        signalRCollectorsStarted = false
+        try { startSignalR() } catch (e: Exception) {
+            Log.w(TAG, "refreshSignalRConnection failed", e)
         }
     }
 

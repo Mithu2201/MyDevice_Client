@@ -12,6 +12,7 @@ import com.example.mydevice.data.remote.api.safeApiCall
 import com.example.mydevice.data.remote.dto.*
 import com.example.mydevice.util.DeviceInfoUtil
 import kotlinx.coroutines.flow.first
+import java.time.Instant
 
 /**
  * Manages device registration, telemetry reporting, config, and event logs.
@@ -35,17 +36,26 @@ class DeviceRepository(
     /** POST device telemetry to server */
     suspend fun updateDeviceDetails(): NetworkResult<DeviceResponse> {
         val deviceInfo = DeviceInfoUtil.collect(context)
-        val companyId = appPrefs.companyId.first()
+        val companyName = appPrefs.companyName.first()
         val request = DeviceRequest(
-            macAddress = getDeviceId(),
+            image = "",
             deviceModel = Build.MODEL,
-            osVersion = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+            macAddress = getDeviceId(),
+            os = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
             appVersion = deviceInfo.appVersion,
+            username = "",
             ipAddress = deviceInfo.ipAddress,
-            wifiSignalStrength = deviceInfo.wifiSignalStrength,
-            batteryLevel = deviceInfo.batteryLevel,
-            isCharging = deviceInfo.isCharging,
-            companyId = companyId
+            zone = deviceInfo.zone,
+            signalStrength = deviceInfo.signalStrength,
+            lastConnected = Instant.now().toString(),
+            bssid = deviceInfo.bssid,
+            linkSpeed = deviceInfo.linkSpeed,
+            essid = deviceInfo.essid,
+            latitude = 0.0,
+            longitude = 0.0,
+            licenseNumber = companyName,
+            installedApps = deviceInfo.installedApps,
+            appInfoList = deviceInfo.appInfoList
         )
         val result = safeApiCall { api.updateDevice(request) }
         if (result is NetworkResult.Success) {

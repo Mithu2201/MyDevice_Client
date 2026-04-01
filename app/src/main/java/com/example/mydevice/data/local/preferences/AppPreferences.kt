@@ -63,7 +63,7 @@ class AppPreferences(private val context: Context) {
     // ── Remote Configuration Flags ──────────────────────────────────────────
 
     val showCheckInView: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs[KEY_SHOW_CHECK_IN] ?: true
+        prefs[KEY_SHOW_CHECK_IN] ?: false
     }
 
     suspend fun setShowCheckInView(show: Boolean) {

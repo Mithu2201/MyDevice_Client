@@ -13,8 +13,10 @@ import com.example.mydevice.data.remote.api.NetworkResult
 import com.example.mydevice.data.repository.KioskRepository
 import com.example.mydevice.data.repository.MessageRepository
 import com.example.mydevice.service.device.DevicePolicyHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class KioskApp(
     val packageName: String,
@@ -51,8 +53,10 @@ class KioskViewModel(
     }
 
     private fun loadKioskApps() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(isLoading = true)
+            }
             when (val result = kioskRepo.refreshKioskApps()) {
                 is NetworkResult.Success -> {
                     val serverApps = result.data.filter { it.isActive }.map { dto ->
@@ -64,24 +68,30 @@ class KioskViewModel(
                     }
                     val testApps = getTestApps(appContext)
                     val apps = serverApps.ifEmpty { testApps }
-                    _uiState.value = _uiState.value.copy(apps = apps, isLoading = false)
+                    withContext(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(apps = apps, isLoading = false)
+                    }
                     enforceKiosk(apps.map { it.packageName })
                 }
                 is NetworkResult.Error -> {
                     val testApps = getTestApps(appContext)
-                    _uiState.value = _uiState.value.copy(
-                        apps = testApps,
-                        isLoading = false,
-                        error = null
-                    )
+                    withContext(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(
+                            apps = testApps,
+                            isLoading = false,
+                            error = null
+                        )
+                    }
                     enforceKiosk(testApps.map { it.packageName })
                 }
                 else -> {
                     val testApps = getTestApps(appContext)
-                    _uiState.value = _uiState.value.copy(
-                        apps = testApps,
-                        isLoading = false
-                    )
+                    withContext(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(
+                            apps = testApps,
+                            isLoading = false
+                        )
+                    }
                     enforceKiosk(testApps.map { it.packageName })
                 }
             }
@@ -90,15 +100,20 @@ class KioskViewModel(
 
     /**
      * Start kiosk enforcement: monitoring service + device-owner policies.
-     * Called after app list loads so the whitelist is accurate.
+     * Heavy DPM binder calls (hideNonWhitelistedApps iterates every installed app)
+     * are offloaded to a background dispatcher to prevent main-thread ANR.
      */
     private fun enforceKiosk(whitelistedPackages: List<String>) {
-        dpmHelper.startKioskService(whitelistedPackages)
-        if (dpmHelper.isDeviceOwner()) {
-            dpmHelper.hideNonWhitelistedApps(whitelistedPackages.toSet())
-            dpmHelper.applyKioskRestrictions()
+        viewModelScope.launch(Dispatchers.Default) {
+            dpmHelper.startKioskService(whitelistedPackages)
+            if (dpmHelper.isDeviceOwner()) {
+                dpmHelper.hideNonWhitelistedApps(whitelistedPackages.toSet())
+                dpmHelper.applyKioskRestrictions()
+            }
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(kioskActive = true)
+            }
         }
-        _uiState.value = _uiState.value.copy(kioskActive = true)
     }
 
     /**
