@@ -2,6 +2,7 @@ package com.example.mydevice
 
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -18,7 +19,6 @@ import com.example.mydevice.data.remote.signalr.DeviceHubConnection
 import com.example.mydevice.data.repository.DeviceRepository
 import com.example.mydevice.data.repository.MessageRepository
 import com.example.mydevice.service.device.DevicePolicyHelper
-import com.example.mydevice.service.kiosk.KioskLockService
 import com.example.mydevice.service.worker.ConfigFileDownloadWorker
 import com.example.mydevice.ui.navigation.AppNavigation
 import com.example.mydevice.ui.theme.MyDeviceTheme
@@ -53,6 +53,20 @@ class MainActivity : ComponentActivity() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var signalRCollectorsStarted = false
+    private val deviceAdminLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (dpmHelper.isAdminActive()) {
+            Toast.makeText(this, "Device admin activated", Toast.LENGTH_SHORT).show()
+            if (dpmHelper.isDeviceOwner()) {
+                dpmHelper.setAllowedLockTaskPackages(
+                    arrayOf(packageName, "com.android.settings")
+                )
+            }
+        } else {
+            Toast.makeText(this, "Device admin not activated — kiosk limited", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     companion object {
         private const val TAG = "MainActivity"
@@ -60,7 +74,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val splashScreen = installSplashScreen()
+        installSplashScreen()
         super.onCreate(savedInstanceState)
 
         dpmHelper = DevicePolicyHelper(this)
@@ -75,9 +89,7 @@ class MainActivity : ComponentActivity() {
         })
 
         window.addFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         )
 
         resolveDependencies()
@@ -132,7 +144,7 @@ class MainActivity : ComponentActivity() {
     private fun ensureDeviceAdmin() {
         try {
             if (!dpmHelper.isAdminActive()) {
-                dpmHelper.requestAdminActivation(this, REQUEST_CODE_DEVICE_ADMIN)
+                deviceAdminLauncher.launch(dpmHelper.createAdminActivationIntent())
             } else if (dpmHelper.isDeviceOwner()) {
                 dpmHelper.setAllowedLockTaskPackages(
                     arrayOf(packageName, "com.android.settings")
@@ -151,23 +163,6 @@ class MainActivity : ComponentActivity() {
                 Toast.LENGTH_LONG
             ).show()
             dpmHelper.openUsageAccessSettings(this)
-        }
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_CODE_DEVICE_ADMIN) {
-            if (dpmHelper.isAdminActive()) {
-                Toast.makeText(this, "Device admin activated", Toast.LENGTH_SHORT).show()
-                if (dpmHelper.isDeviceOwner()) {
-                    dpmHelper.setAllowedLockTaskPackages(
-                        arrayOf(packageName, "com.android.settings")
-                    )
-                }
-            } else {
-                Toast.makeText(this, "Device admin not activated — kiosk limited", Toast.LENGTH_SHORT).show()
-            }
         }
     }
 
@@ -206,18 +201,6 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to start SignalR", e)
             }
-        }
-    }
-
-    /**
-     * Reconnect SignalR after any auth state change so the hub picks up the
-     * latest token if one exists, or falls back to anonymous hub mode.
-     */
-    fun refreshSignalRConnection() {
-        try { hubConnection?.disconnect() } catch (_: Exception) {}
-        signalRCollectorsStarted = false
-        try { startSignalR() } catch (e: Exception) {
-            Log.w(TAG, "refreshSignalRConnection failed", e)
         }
     }
 

@@ -4,11 +4,22 @@ import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.os.Build
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -27,18 +38,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun KioskScreen(
     onNavigateToMessages: () -> Unit,
     onNavigateToSettings: () -> Unit,
-    onNavigateToCharging: () -> Unit,
+    onNavigateToCharging: () -> Unit = {},
     viewModel: KioskViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -68,14 +77,7 @@ fun KioskScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    // Long-press the title to open the admin exit dialog
                     Column(
-                        modifier = Modifier.combinedClickable(
-                            onClick = {},
-                            onLongClick = { showExitPinDialog = true },
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        )
                     ) {
                         Text(
                             text = uiState.companyName.ifEmpty { "MyDevice" },
