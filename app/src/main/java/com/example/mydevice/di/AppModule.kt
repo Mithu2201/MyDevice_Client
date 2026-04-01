@@ -25,6 +25,6 @@ val appModule = module {
     single { DeviceRepository(androidContext(), get(), get(), get()) }
     single { CompanyRepository(get(), get()) }
     single { KioskRepository(get(), get()) }
-    single { MessageRepository(get()) }
+    single { MessageRepository(get(), get()) }
     single { ConfigFileRepository(androidContext(), get(), get()) }
 }

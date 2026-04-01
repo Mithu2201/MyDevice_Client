@@ -86,6 +86,18 @@ class DevicePolicyHelper(private val context: Context) {
 
         try {
             dpm.setLockTaskPackages(adminComponent, packages)
+
+            // LOCK_TASK_FEATURE_NONE (API 28+) strips all system chrome from the
+            // screen while in lock task mode: navigation bar, status bar, home
+            // button, recents, and the global actions menu are all hidden at the
+            // OS level — stronger than immersive mode alone.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                dpm.setLockTaskFeatures(
+                    adminComponent,
+                    DevicePolicyManager.LOCK_TASK_FEATURE_NONE
+                )
+            }
+
             activity.startLockTask()
             Log.i(TAG, "Lock task mode started with ${packages.size} packages")
         } catch (e: Exception) {
@@ -96,6 +108,13 @@ class DevicePolicyHelper(private val context: Context) {
     fun stopLockTaskMode(activity: Activity) {
         try {
             activity.stopLockTask()
+            // Restore default lock task features when leaving kiosk mode.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                dpm.setLockTaskFeatures(
+                    adminComponent,
+                    DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS
+                )
+            }
             Log.i(TAG, "Lock task mode stopped")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to stop lock task", e)
@@ -185,6 +204,16 @@ class DevicePolicyHelper(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_SYSTEM_ERROR_DIALOGS)
             }
+
+            // Block the user from expanding the status bar / notification panel.
+            // This prevents access to quick settings and notifications from the top bar.
+            dpm.setStatusBarDisabled(adminComponent, true)
+
+            // Keep the screen on while the device is plugged in (AC=1, USB=2, Wireless=4).
+            // Value 7 = all charging sources combined. Paired with FLAG_KEEP_SCREEN_ON in
+            // the activity window this fully prevents the kiosk screen from sleeping.
+            dpm.setGlobalSetting(adminComponent, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, "7")
+
             Log.i(TAG, "Kiosk restrictions applied")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to apply kiosk restrictions", e)
@@ -200,6 +229,11 @@ class DevicePolicyHelper(private val context: Context) {
             dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_ADD_USER)
             dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA)
             dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_USB_FILE_TRANSFER)
+
+            // Re-enable the status bar and restore normal screen-on behaviour.
+            dpm.setStatusBarDisabled(adminComponent, false)
+            dpm.setGlobalSetting(adminComponent, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, "0")
+
             Log.i(TAG, "Kiosk restrictions cleared")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to clear kiosk restrictions", e)

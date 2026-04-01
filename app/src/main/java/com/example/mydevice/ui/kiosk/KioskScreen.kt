@@ -1,7 +1,10 @@
 package com.example.mydevice.ui.kiosk
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.os.Build
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,11 +27,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun KioskScreen(
     onNavigateToMessages: () -> Unit,
@@ -63,7 +68,15 @@ fun KioskScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    // Long-press the title to open the admin exit dialog
+                    Column(
+                        modifier = Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = { showExitPinDialog = true },
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        )
+                    ) {
                         Text(
                             text = uiState.companyName.ifEmpty { "MyDevice" },
                             style = MaterialTheme.typography.titleLarge,
@@ -358,7 +371,15 @@ private fun KioskAppCard(
         ) {
             if (icon != null) {
                 val bitmap = remember(icon) {
-                    icon.toBitmap(width = 56, height = 56)
+                    val software = icon.toBitmap(width = 56, height = 56)
+                    // Hardware bitmaps live in GPU memory and bypass the deprecated
+                    // Bitmap.prepareToDraw() pinning path (warned on Android Q+).
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        software.copy(Bitmap.Config.HARDWARE, false)
+                            .also { software.recycle() }
+                    } else {
+                        software
+                    }
                 }
                 Image(
                     bitmap = bitmap.asImageBitmap(),

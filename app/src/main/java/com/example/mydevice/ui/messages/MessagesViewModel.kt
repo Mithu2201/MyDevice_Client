@@ -2,8 +2,10 @@ package com.example.mydevice.ui.messages
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.mydevice.data.local.preferences.AppPreferences
 import com.example.mydevice.data.local.database.entity.IncomingMessageEntity
 import com.example.mydevice.data.repository.MessageRepository
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -21,7 +23,8 @@ data class MessagesUiState(
 )
 
 class MessagesViewModel(
-    private val messageRepo: MessageRepository
+    private val messageRepo: MessageRepository,
+    private val appPrefs: AppPreferences
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MessagesUiState())
@@ -29,6 +32,7 @@ class MessagesViewModel(
 
     init {
         observeMessages()
+        refreshFromServer()
     }
 
     private fun observeMessages() {
@@ -56,6 +60,13 @@ class MessagesViewModel(
     fun markAllAsRead() {
         viewModelScope.launch {
             messageRepo.markAllAsRead()
+        }
+    }
+
+    fun refreshFromServer() {
+        viewModelScope.launch {
+            val serverDeviceId = appPrefs.serverDeviceId.first()
+            messageRepo.syncMessages(serverDeviceId)
         }
     }
 }

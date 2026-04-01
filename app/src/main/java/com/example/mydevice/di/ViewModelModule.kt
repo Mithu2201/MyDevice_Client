@@ -19,10 +19,10 @@ import org.koin.dsl.module
  * - Koin handles SavedStateHandle injection automatically
  */
 val viewModelModule = module {
-    viewModel { SplashViewModel(get(), get(), get()) }
+    viewModel { SplashViewModel(get(), get(), get(), get()) }
     viewModel { CheckInViewModel(get(), get(), get()) }
     viewModel { KioskViewModel(get(), get(), get(), get(), androidContext()) }
     viewModel { ChargingViewModel(get(), get()) }
-    viewModel { MessagesViewModel(get()) }
+    viewModel { MessagesViewModel(get(), get()) }
     viewModel { SettingsViewModel(get(), get()) }
 }

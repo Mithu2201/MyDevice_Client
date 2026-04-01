@@ -22,6 +22,11 @@
 
     <!-- Foreground service / WorkManager -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+         Required on Android 14+ (API 34) for MDM / device-owner foreground services.
+         systemExempted is the designated type for Device Policy Controllers.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Notifications -->
@@ -33,6 +38,9 @@
     <!-- Usage stats (for app monitoring in kiosk mode) -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
+    <!-- App inventory reporting for device telemetry on Android 11+ -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <!-- Camera control via DevicePolicyManager -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -74,6 +82,13 @@
                 android:resource="@xml/device_admin_policies" />
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <!--
+                     Required for Android Enterprise QR / NFC provisioning.
+                     Without this the system cannot deliver the provisioning-complete
+                     broadcast, causing the provisioning watchdog to factory-reset
+                     the device after its timeout elapses.
+                -->
+                <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
             </intent-filter>
         </receiver>
 
@@ -88,10 +103,16 @@
         </receiver>
 
         <!-- Kiosk Lock Service — monitors foreground app and enforces whitelist -->
+        <!--
+             Android 14 (API 34) mandates a foregroundServiceType on every FGS.
+             systemExempted is purpose-built for device owner / MDM apps and
+             avoids the MissingForegroundServiceTypeException crash.
+        -->
         <service
             android:name=".service.kiosk.KioskLockService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="systemExempted" />
 
         <!-- Disable default WorkManagerInitializer so Koin can manage it -->
         <provider
