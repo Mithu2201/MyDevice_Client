@@ -43,15 +43,14 @@ class DevicePolicyHelper(private val context: Context) {
 
     fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(context.packageName)
 
-    fun requestAdminActivation(activity: Activity, requestCode: Int = 1001) {
-        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+    fun createAdminActivationIntent(): Intent {
+        return Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
             putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
             putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                 "MyDevice needs device admin access for enterprise management features."
             )
         }
-        activity.startActivityForResult(intent, requestCode)
     }
 
     fun lockScreen() {
