@@ -7,8 +7,7 @@ import android.os.Build
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -40,13 +39,12 @@ fun KioskScreen(
     onNavigateToMessages: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToCharging: () -> Unit,
-    onLogout: () -> Unit,
     viewModel: KioskViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context as? Activity
-    var showExitPinDialog by remember { mutableStateOf(false) }
+    var showExitDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (activity != null) {
@@ -54,13 +52,14 @@ fun KioskScreen(
         }
     }
 
-    // Exit PIN dialog — shown on long-press of the title bar
-    if (showExitPinDialog) {
-        ExitPinDialog(
-            onDismiss = { showExitPinDialog = false },
-            onConfirm = {
-                showExitPinDialog = false
-                onLogout()
+    if (showExitDialog) {
+        ExitKioskPinDialog(
+            onDismiss = { showExitDialog = false },
+            onPinCorrect = {
+                showExitDialog = false
+                if (activity != null) {
+                    viewModel.deactivateKiosk(activity)
+                }
             }
         )
     }
@@ -89,7 +88,10 @@ fun KioskScreen(
                             color = if (uiState.kioskActive)
                                 MaterialTheme.colorScheme.primary
                             else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            modifier = Modifier.clickable(
+                                enabled = uiState.kioskActive
+                            ) { showExitDialog = true }
                         )
                     }
                 },
@@ -192,164 +194,147 @@ fun KioskScreen(
     }
 }
 
-/**
- * Admin exit dialog with a 4-digit PIN pad.
- *
- * Triggered by long-pressing the kiosk title bar.
- * UI only — wire real PIN validation in [onConfirm] when ready.
- */
+private const val EXIT_PIN = "1234"
+private const val PIN_LENGTH = 4
+
 @Composable
-private fun ExitPinDialog(
+private fun ExitKioskPinDialog(
     onDismiss: () -> Unit,
-    onConfirm: () -> Unit
+    onPinCorrect: () -> Unit
 ) {
     var pin by remember { mutableStateOf("") }
-    val pinLength = 4
+    var error by remember { mutableStateOf(false) }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        title = {
             Column(
-                modifier = Modifier.padding(28.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Header
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(52.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.AdminPanelSettings,
-                            contentDescription = null,
-                            modifier = Modifier.size(28.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(14.dp))
-
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Admin Exit",
+                    text = "Exit Kiosk Mode",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(Modifier.height(4.dp))
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 Text(
-                    text = "Enter the 4-digit PIN to exit kiosk mode",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center
+                    text = "Enter admin PIN to exit",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
 
-                Spacer(Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // PIN dot indicators
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    repeat(pinLength) { index ->
+                    repeat(PIN_LENGTH) { index ->
                         Box(
                             modifier = Modifier
-                                .size(15.dp)
+                                .size(16.dp)
                                 .clip(CircleShape)
                                 .background(
                                     if (index < pin.length)
-                                        MaterialTheme.colorScheme.primary
-                                    else
-                                        MaterialTheme.colorScheme.surfaceVariant
+                                        if (error) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant
                                 )
                         )
                     }
                 }
 
-                Spacer(Modifier.height(22.dp))
+                if (error) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Incorrect PIN",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
 
-                // Numpad
-                val numpadRows = listOf(
+                Spacer(modifier = Modifier.height(24.dp))
+
+                val keys = listOf(
                     listOf("1", "2", "3"),
                     listOf("4", "5", "6"),
                     listOf("7", "8", "9"),
-                    listOf("⌫", "0", "✓")
+                    listOf("", "0", "⌫")
                 )
-
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    numpadRows.forEach { row ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            row.forEach { key ->
-                                when (key) {
-                                    "⌫" -> OutlinedButton(
-                                        onClick = {
+                keys.forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        row.forEach { key ->
+                            if (key.isEmpty()) {
+                                Spacer(modifier = Modifier.size(56.dp))
+                            } else {
+                                FilledTonalButton(
+                                    onClick = {
+                                        error = false
+                                        if (key == "⌫") {
                                             if (pin.isNotEmpty()) pin = pin.dropLast(1)
-                                        },
-                                        modifier = Modifier.weight(1f).height(52.dp),
-                                        shape = RoundedCornerShape(14.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Backspace,
-                                            contentDescription = "Delete",
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    "✓" -> Button(
-                                        onClick = {
-                                            if (pin.length == pinLength) {
-                                                // TODO: validate against stored admin PIN
-                                                onConfirm()
+                                        } else if (pin.length < PIN_LENGTH) {
+                                            val newPin = pin + key
+                                            pin = newPin
+                                            if (newPin.length == PIN_LENGTH) {
+                                                if (newPin == EXIT_PIN) {
+                                                    onPinCorrect()
+                                                } else {
+                                                    error = true
+                                                    pin = ""
+                                                }
                                             }
-                                        },
-                                        modifier = Modifier.weight(1f).height(52.dp),
-                                        shape = RoundedCornerShape(14.dp),
-                                        enabled = pin.length == pinLength
-                                    ) {
+                                        }
+                                    },
+                                    modifier = Modifier.size(56.dp),
+                                    shape = CircleShape,
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    if (key == "⌫") {
                                         Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "Confirm",
-                                            modifier = Modifier.size(18.dp)
+                                            imageVector = Icons.Default.Backspace,
+                                            contentDescription = "Delete",
+                                            modifier = Modifier.size(20.dp)
                                         )
-                                    }
-                                    else -> OutlinedButton(
-                                        onClick = {
-                                            if (pin.length < pinLength) pin += key
-                                        },
-                                        modifier = Modifier.weight(1f).height(52.dp),
-                                        shape = RoundedCornerShape(14.dp)
-                                    ) {
+                                    } else {
                                         Text(
                                             text = key,
                                             style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Medium,
-                                            fontSize = 18.sp
+                                            fontWeight = FontWeight.Medium
                                         )
                                     }
                                 }
                             }
                         }
                     }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                TextButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Cancel")
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
         }
-    }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
