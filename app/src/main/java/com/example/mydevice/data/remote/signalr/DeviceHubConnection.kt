@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
  * Manages the persistent SignalR WebSocket to /device-hub.
  *
  * LIFECYCLE:
- * 1. connect() builds the HubConnection with auth token, registers listeners
+ * 1. connect() builds the HubConnection, optionally with auth token, registers listeners
  * 2. On successful connect, sends AddDeviceId to register with the hub
  * 3. Server pushes commands (Reboot, WifiProfile, SendMessage, etc.)
  * 4. On disconnect, retries with exponential backoff [0s, 10s, 20s, 30s, 60s]
@@ -32,7 +32,7 @@ class DeviceHubConnection(
 ) {
     private var hubConnection: HubConnection? = null
     private var deviceId: String = ""
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val retryDelays = longArrayOf(0, 10_000, 20_000, 30_000, 60_000)
     private var retryIndex = 0
@@ -67,17 +67,26 @@ class DeviceHubConnection(
 
     fun connect(deviceId: String) {
         this.deviceId = deviceId
-        val token = securePreferences.accessToken ?: return
+        if (!scope.isActive) {
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        }
+        val token = securePreferences.accessToken
 
-        hubConnection = HubConnectionBuilder.create(Constants.SIGNALR_HUB_URL)
-            .withAccessTokenProvider(io.reactivex.rxjava3.core.Single.just(token))
+        val builder = HubConnectionBuilder.create(Constants.SIGNALR_HUB_URL)
             .withTransport(TransportEnum.WEBSOCKETS)
             .shouldSkipNegotiate(true)
-            .build()
-            .apply {
-                serverTimeout = TimeUnit.SECONDS.toMillis(Constants.SIGNALR_SERVER_TIMEOUT_SECONDS)
-                keepAliveInterval = TimeUnit.SECONDS.toMillis(Constants.SIGNALR_KEEP_ALIVE_SECONDS)
-            }
+
+        if (!token.isNullOrBlank()) {
+            Log.i(TAG, "Connecting to SignalR with bearer token")
+            builder.withAccessTokenProvider(io.reactivex.rxjava3.core.Single.just(token))
+        } else {
+            Log.i(TAG, "Connecting to SignalR without token (anonymous hub mode)")
+        }
+
+        hubConnection = builder.build().apply {
+            serverTimeout = TimeUnit.SECONDS.toMillis(Constants.SIGNALR_SERVER_TIMEOUT_SECONDS)
+            keepAliveInterval = TimeUnit.SECONDS.toMillis(Constants.SIGNALR_KEEP_ALIVE_SECONDS)
+        }
 
         registerListeners()
         startConnection()
@@ -98,11 +107,10 @@ class DeviceHubConnection(
 
         hub.on(Constants.SignalREvents.SEND_MESSAGE, { payload ->
             scope.launch {
-                val msg = SignalRMessage.fromJson(payload)
-                _messageCommand.emit(msg)
-                hub.send(Constants.SignalRMethods.MESSAGE_RECEIVED, msg.id)
+                _messageCommand.emit(payload)
+                hub.send(Constants.SignalRMethods.MESSAGE_RECEIVED, payload.id)
             }
-        }, String::class.java)
+        }, SignalRMessage::class.java)
 
         hub.on(Constants.SignalREvents.REMOTE_ASSISTANCE_OFFER, { sdp ->
             scope.launch { _remoteAssistanceOffer.emit(sdp) }
@@ -177,8 +185,14 @@ class DeviceHubConnection(
     // ── Disconnect ──────────────────────────────────────────────────────────
 
     fun disconnect() {
-        scope.cancel()
-        hubConnection?.stop()
+        // Do not cancel the shared scope here. MainActivity refreshes the hub by
+        // calling disconnect() followed by connect(), and canceling the scope
+        // permanently breaks future reconnect attempts and incoming event emits.
+        try {
+            hubConnection?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "SignalR stop failed", e)
+        }
         hubConnection = null
         _connectionState.value = HubConnectionState.DISCONNECTED
     }
@@ -195,24 +209,11 @@ class DeviceHubConnection(
  * Data class representing a message pushed from the server via SignalR.
  */
 data class SignalRMessage(
-    val id: String = "",
+    val id: Int = 0,
+    val mobileStatusId: Int = 0,
     val sendBy: String = "",
     val description: String = "",
-    val sentAt: String = ""
-) {
-    companion object {
-        fun fromJson(json: String): SignalRMessage {
-            return try {
-                val obj = org.json.JSONObject(json)
-                SignalRMessage(
-                    id = obj.optString("id", ""),
-                    sendBy = obj.optString("sendBy", ""),
-                    description = obj.optString("description", ""),
-                    sentAt = obj.optString("sentAt", "")
-                )
-            } catch (e: Exception) {
-                SignalRMessage(description = json)
-            }
-        }
-    }
-}
+    val isSent: Boolean = false,
+    val sentAt: String = "",
+    val receivedAt: String = ""
+)

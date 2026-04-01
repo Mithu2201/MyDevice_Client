@@ -1,5 +1,6 @@
 package com.example.mydevice.ui.settings
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -34,6 +38,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
@@ -58,7 +64,15 @@ fun SettingsScreen(
             // ── Device Identity ─────────────────────────────────────────
             SectionHeader("Device Identity")
             SettingsInfoCard {
-                InfoRow(icon = Icons.Default.Fingerprint, label = "Device ID", value = uiState.deviceId)
+                InfoRow(
+                    icon = Icons.Default.Fingerprint,
+                    label = "Device ID",
+                    value = uiState.deviceId,
+                    onCopy = {
+                        clipboardManager.setText(AnnotatedString(uiState.deviceId))
+                        Toast.makeText(context, "Device ID copied", Toast.LENGTH_SHORT).show()
+                    }
+                )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 InfoRow(icon = Icons.Default.Business, label = "Company", value = uiState.companyName)
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -188,7 +202,12 @@ private fun SettingsInfoCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun InfoRow(icon: ImageVector, label: String, value: String) {
+private fun InfoRow(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    onCopy: (() -> Unit)? = null
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -203,12 +222,28 @@ private fun InfoRow(icon: ImageVector, label: String, value: String) {
             Spacer(modifier = Modifier.width(12.dp))
             Text(label, style = MaterialTheme.typography.bodyMedium)
         }
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+            if (onCopy != null) {
+                Spacer(modifier = Modifier.width(4.dp))
+                IconButton(
+                    onClick = onCopy,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy",
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                    )
+                }
+            }
+        }
     }
 }
 
