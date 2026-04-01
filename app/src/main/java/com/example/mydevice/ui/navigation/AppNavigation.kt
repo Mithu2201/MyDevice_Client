@@ -47,7 +47,12 @@ fun AppNavigation(navController: NavHostController) {
             KioskScreen(
                 onNavigateToMessages = { navController.navigate(Routes.MESSAGES) },
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
-                onNavigateToCharging = { navController.navigate(Routes.CHARGING) }
+                onNavigateToCharging = { navController.navigate(Routes.CHARGING) },
+                onLogout = {
+                    navController.navigate(Routes.SPLASH) {
+                        popUpTo(Routes.KIOSK) { inclusive = true }
+                    }
+                }
             )
         }
 

@@ -204,6 +204,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Reconnect SignalR after auth/registration updates so the hub picks up the
+     * latest token if one exists, or falls back to anonymous hub mode.
+     */
+    fun refreshSignalRConnection() {
+        try { hubConnection?.disconnect() } catch (_: Exception) {}
+        signalRCollectorsStarted = false
+        try { startSignalR() } catch (e: Exception) {
+            Log.w(TAG, "refreshSignalRConnection failed", e)
+        }
+    }
+
     private fun collectSignalRMessages() {
         scope.launch {
             try {

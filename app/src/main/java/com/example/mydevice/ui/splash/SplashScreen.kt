@@ -23,11 +23,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.mydevice.MainActivity
 import com.example.mydevice.ui.theme.Blue500
 import com.example.mydevice.ui.theme.Blue700
 import org.koin.androidx.compose.koinViewModel
@@ -58,11 +60,13 @@ fun SplashScreen(
     viewModel: SplashViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var companyId by remember { mutableStateOf("") }
 
     // Navigation logic — unchanged
     LaunchedEffect(uiState.navigateToMain) {
         if (uiState.navigateToMain) {
+            (context as? MainActivity)?.refreshSignalRConnection()
             onNavigateToKiosk()
         }
     }
