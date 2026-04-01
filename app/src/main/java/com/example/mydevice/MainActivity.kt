@@ -2,18 +2,40 @@ package com.example.mydevice
 
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.navigation.compose.rememberNavController
+import com.example.mydevice.data.local.database.entity.IncomingMessageEntity
 import com.example.mydevice.data.local.preferences.AppPreferences
 import com.example.mydevice.data.remote.signalr.DeviceHubConnection
 import com.example.mydevice.data.repository.DeviceRepository
@@ -21,13 +43,17 @@ import com.example.mydevice.data.repository.MessageRepository
 import com.example.mydevice.service.device.DevicePolicyHelper
 import com.example.mydevice.service.worker.ConfigFileDownloadWorker
 import com.example.mydevice.ui.navigation.AppNavigation
+import com.example.mydevice.ui.theme.Blue700
 import com.example.mydevice.ui.theme.MyDeviceTheme
 import com.example.mydevice.util.Constants
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import org.koin.core.context.GlobalContext
 import android.util.Log
 import android.widget.Toast
+import com.microsoft.signalr.HubConnectionState
 
 /**
  * Single Activity — the entire UI is Jetpack Compose with Navigation.
@@ -43,6 +69,12 @@ import android.widget.Toast
  * - Auto-starts on boot via BootReceiver
  */
 class MainActivity : ComponentActivity() {
+    private var periodicMessageSyncJob: Job? = null
+    private var messageObserverJob: Job? = null
+    private var bannerHideJob: Job? = null
+    private val announcedMessageIds = linkedSetOf<String>()
+    private val _activeBannerNotice = MutableStateFlow<IncomingBannerNotice?>(null)
+    private val activeBannerNotice = _activeBannerNotice.asStateFlow()
 
     private var hubConnection: DeviceHubConnection? = null
     private var deviceRepo: DeviceRepository? = null
@@ -95,10 +127,23 @@ class MainActivity : ComponentActivity() {
         resolveDependencies()
 
         setContent {
+            val bannerNotice by activeBannerNotice.collectAsState()
             MyDeviceTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    val navController = rememberNavController()
-                    AppNavigation(navController = navController)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        val navController = rememberNavController()
+                        AppNavigation(navController = navController)
+                    }
+
+                    bannerNotice?.let { notice ->
+                        IncomingMessageBanner(
+                            notice = notice,
+                            onClose = { _activeBannerNotice.value = null },
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(horizontal = 16.dp, vertical = 20.dp)
+                        )
+                    }
                 }
             }
         }
@@ -113,6 +158,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         enableImmersiveMode()
+        scope.launch {
+            try { triggerMessageSync("resume") } catch (_: Exception) {}
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -187,15 +235,16 @@ class MainActivity : ComponentActivity() {
             try {
                 val isRegistered = try { appPrefs?.isRegistered?.first() ?: false } catch (_: Exception) { false }
                 if (isRegistered) {
-                    val deviceId = try { deviceRepo?.getDeviceId() ?: "" } catch (_: Exception) { "" }
-                    if (deviceId.isNotBlank()) {
-                        if (hubConnection?.isConnected() != true) {
-                            hubConnection?.connect(deviceId)
-                        }
-                        if (!signalRCollectorsStarted) {
-                            collectSignalRMessages()
-                            signalRCollectorsStarted = true
-                        }
+                    if (!signalRCollectorsStarted) {
+                        collectSignalRMessages()
+                        signalRCollectorsStarted = true
+                    }
+                    ensureMessageObserver()
+                    ensurePeriodicMessageSync()
+
+                    val registrationId = resolveSignalRRegistrationId()
+                    if (registrationId.isNotBlank() && hubConnection?.isConnected() != true) {
+                        hubConnection?.connect(registrationId)
                     }
                 }
             } catch (e: Exception) {
@@ -210,9 +259,70 @@ class MainActivity : ComponentActivity() {
      */
     fun refreshSignalRConnection() {
         try { hubConnection?.disconnect() } catch (_: Exception) {}
-        signalRCollectorsStarted = false
         try { startSignalR() } catch (e: Exception) {
             Log.w(TAG, "refreshSignalRConnection failed", e)
+        }
+    }
+
+    private suspend fun resolveSignalRRegistrationId(): String {
+        val serverDeviceId = try { appPrefs?.serverDeviceId?.first() ?: 0 } catch (_: Exception) { 0 }
+        val localDeviceId = try { deviceRepo?.getStableDeviceId() ?: "" } catch (_: Exception) { "" }
+        val registrationId = if (serverDeviceId > 0) serverDeviceId.toString() else localDeviceId
+        Log.i(
+            TAG,
+            "SignalR registration ID resolved. serverDeviceId=$serverDeviceId, localDeviceId=$localDeviceId, using=$registrationId"
+        )
+        return registrationId
+    }
+
+    private suspend fun triggerMessageSync(reason: String) {
+        val deviceId = try { deviceRepo?.getStableDeviceId() ?: "" } catch (_: Exception) { "" }
+        if (deviceId.isBlank()) {
+            Log.i(TAG, "Skipping message sync ($reason) because local deviceId is unavailable")
+            return
+        }
+        try {
+            val synced = messageRepo?.syncMessages(deviceId)
+            Log.i(TAG, "Message sync triggered ($reason) for deviceId=$deviceId result=$synced")
+        } catch (e: Exception) {
+            Log.w(TAG, "Message sync failed ($reason) for deviceId=$deviceId", e)
+        }
+    }
+
+    private fun ensureMessageObserver() {
+        if (messageObserverJob?.isActive == true) return
+        messageObserverJob = scope.launch {
+            try {
+                val repo = messageRepo ?: return@launch
+                var initialized = false
+                repo.getAllMessages().collect { messages ->
+                    if (!initialized) {
+                        announcedMessageIds.clear()
+                        announcedMessageIds.addAll(messages.map { it.id })
+                        initialized = true
+                        return@collect
+                    }
+
+                    val newMessages = messages.filter { it.id !in announcedMessageIds }
+                    if (newMessages.isNotEmpty()) {
+                        announcedMessageIds.addAll(newMessages.map { it.id })
+                        val latest = newMessages.first()
+                        showIncomingMessageNotice(latest)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error observing stored messages", e)
+            }
+        }
+    }
+
+    private fun ensurePeriodicMessageSync() {
+        if (periodicMessageSyncJob?.isActive == true) return
+        periodicMessageSyncJob = scope.launch {
+            while (isActive) {
+                delay(30_000)
+                try { triggerMessageSync("periodic_poll") } catch (_: Exception) {}
+            }
         }
     }
 
@@ -222,12 +332,26 @@ class MainActivity : ComponentActivity() {
                 val conn = hubConnection ?: return@launch
                 val repo = messageRepo ?: return@launch
                 conn.messageCommand.collect { msg ->
-                    try { repo.saveMessage(msg) } catch (e: Exception) {
+                    try {
+                        repo.saveMessage(msg)
+                    } catch (e: Exception) {
                         Log.w(TAG, "Failed to save message", e)
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error collecting SignalR messages", e)
+            }
+        }
+        scope.launch {
+            try {
+                val conn = hubConnection ?: return@launch
+                conn.connectionState.collect { state ->
+                    if (state == HubConnectionState.CONNECTED) {
+                        triggerMessageSync("signalr_connected")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error collecting SignalR connection state", e)
             }
         }
         scope.launch {
@@ -253,7 +377,10 @@ class MainActivity : ComponentActivity() {
             try {
                 val isRegistered = try { appPrefs?.isRegistered?.first() ?: false } catch (_: Exception) { false }
                 if (isRegistered) {
+                    ensureMessageObserver()
+                    ensurePeriodicMessageSync()
                     try { deviceRepo?.logEvent(Constants.EventTypes.APP_START, "App started") } catch (_: Exception) {}
+                    try { triggerMessageSync("app_start") } catch (_: Exception) {}
                     try { ConfigFileDownloadWorker.enqueueOnce(this@MainActivity) } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
@@ -266,7 +393,101 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        bannerHideJob?.cancel()
+        messageObserverJob?.cancel()
+        periodicMessageSyncJob?.cancel()
         try { hubConnection?.disconnect() } catch (_: Exception) {}
         scope.cancel()
+    }
+
+    private fun showIncomingMessageNotice(message: IncomingMessageEntity) {
+        val preview = message.description
+            .trim()
+            .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            ?: "New message received"
+        val sender = message.sendBy.ifBlank { "Admin" }
+
+        scope.launch(Dispatchers.Main) {
+            _activeBannerNotice.value = IncomingBannerNotice(
+                sender = sender,
+                message = preview,
+                timestamp = message.receivedAt
+            )
+            bannerHideJob?.cancel()
+            bannerHideJob = scope.launch(Dispatchers.Main) {
+                delay(8_000)
+                _activeBannerNotice.value = null
+            }
+        }
+    }
+}
+
+private data class IncomingBannerNotice(
+    val sender: String,
+    val message: String,
+    val timestamp: String
+)
+
+@Composable
+private fun IncomingMessageBanner(
+    notice: IncomingBannerNotice,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Blue700),
+        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Blue700)
+                .padding(horizontal = 20.dp, vertical = 18.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "New Message",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Text(
+                        text = "${notice.sender} • ${formatBannerTimestamp(notice.timestamp)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                    )
+                }
+                IconButton(onClick = onClose) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close notification",
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
+            Text(
+                text = notice.message,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+    }
+}
+
+private fun formatBannerTimestamp(isoString: String): String {
+    return try {
+        val instant = java.time.Instant.parse(isoString)
+        val local = java.time.LocalDateTime.ofInstant(instant, java.time.ZoneId.systemDefault())
+        val formatter = java.time.format.DateTimeFormatter.ofPattern("MMM dd, HH:mm")
+        local.format(formatter)
+    } catch (_: Exception) {
+        "Now"
     }
 }

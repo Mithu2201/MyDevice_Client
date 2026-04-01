@@ -7,12 +7,15 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.serialization.json.Json
+import org.json.JSONObject
 
 /**
  * Ktor-based API service covering all 13 REST endpoints.
  * Each method maps directly to a backend route on mydevices.myweb.net.au.
  */
 class MyDevicesApi(private val client: HttpClient) {
+    private val json = Json { ignoreUnknownKeys = true }
 
     // ──────────────────────────── Authentication ────────────────────────────
 
@@ -34,12 +37,10 @@ class MyDevicesApi(private val client: HttpClient) {
     suspend fun getUsersByCompany(companyId: Int): List<UserDto> =
         client.get("api/Users/$companyId").body()
 
-    /** GET api/Message/GetMessages — fallback inbox sync for a device */
-    suspend fun getMessagesRaw(deviceId: Int, page: Int = 1, limit: Int = 50): String =
-        client.get("api/Message/GetMessages") {
-            parameter("DeviceId", deviceId)
-            parameter("Page", page)
-            parameter("Limit", limit)
+    /** GET api/Device/GetDeviceMessages — fallback inbox sync by macAddress */
+    suspend fun getDeviceMessagesRaw(macAddress: String): String =
+        client.get("api/Device/GetDeviceMessages") {
+            parameter("macAddress", macAddress)
         }.bodyAsText()
 
     // ──────────────────────────── Company / Licensee ────────────────────────
@@ -58,11 +59,42 @@ class MyDevicesApi(private val client: HttpClient) {
     // ──────────────────────────── Device Telemetry ──────────────────────────
 
     /** POST api/Device — register or update device details (telemetry) */
-    suspend fun updateDevice(request: DeviceRequest): DeviceResponse =
-        client.post("api/Device") {
+    suspend fun updateDevice(request: DeviceRequest): DeviceResponse {
+        val raw = client.post("api/Device") {
             contentType(ContentType.Application.Json)
             setBody(request)
-        }.body()
+        }.bodyAsText()
+        return parseDeviceResponse(raw)
+    }
+
+    private fun parseDeviceResponse(raw: String): DeviceResponse {
+        try {
+            return json.decodeFromString(DeviceResponse.serializer(), raw)
+        } catch (_: Exception) {
+            val root = JSONObject(raw)
+            val payload = when {
+                root.has("data") && root.opt("data") is JSONObject -> root.getJSONObject("data")
+                root.has("result") && root.opt("result") is JSONObject -> root.getJSONObject("result")
+                else -> root
+            }
+            return DeviceResponse(
+                id = payload.optInt("id", 0),
+                macAddress = payload.optNullableString("macAddress"),
+                deviceModel = payload.optNullableString("deviceModel"),
+                osVersion = payload.optNullableString("osVersion"),
+                appVersion = payload.optNullableString("appVersion"),
+                ipAddress = payload.optNullableString("ipAddress"),
+                companyId = payload.optInt("companyId", 0),
+                lastSeen = payload.optNullableString("lastSeen"),
+                isOnline = payload.optBoolean("isOnline", false)
+            )
+        }
+    }
+
+    private fun JSONObject.optNullableString(key: String): String? {
+        if (!has(key) || isNull(key)) return null
+        return optString(key, null)
+    }
 
     /** GET api/DeviceConfiguration?deviceid= — fetch remote configuration flags */
     suspend fun getDeviceConfiguration(deviceId: String): DeviceConfigurationResponse =

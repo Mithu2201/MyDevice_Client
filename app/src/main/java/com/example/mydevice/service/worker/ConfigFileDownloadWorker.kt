@@ -54,7 +54,7 @@ class ConfigFileDownloadWorker(
         }
 
         if (downloadedFiles.isNotEmpty()) {
-            configFileRepo.reportDownloadedFiles(deviceRepo.getDeviceId(), downloadedFiles)
+            configFileRepo.reportDownloadedFiles(deviceRepo.getStableDeviceId(), downloadedFiles)
         }
 
         return Result.success()

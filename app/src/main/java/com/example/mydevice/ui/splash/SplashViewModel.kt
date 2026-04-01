@@ -1,5 +1,6 @@
 package com.example.mydevice.ui.splash
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mydevice.data.remote.api.NetworkResult
@@ -57,7 +58,7 @@ class SplashViewModel(
 
     /** Step 2: Try auto-register by device ID */
     private suspend fun tryAutoRegister() {
-        val deviceId = deviceRepo.getDeviceId()
+        val deviceId = deviceRepo.getStableDeviceId()
         appPrefs.setDeviceId(deviceId)
 
         when (val result = companyRepo.autoRegister(deviceId)) {
@@ -77,7 +78,8 @@ class SplashViewModel(
     fun registerWithCompanyId(companyIdText: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isRegistering = true, error = null)
-            val deviceId = deviceRepo.getDeviceId()
+            val deviceId = deviceRepo.getStableDeviceId()
+            appPrefs.setDeviceId(deviceId)
             val companyId = companyIdText.toIntOrNull()
             if (companyId == null || companyId <= 0) {
                 _uiState.value = _uiState.value.copy(
@@ -108,8 +110,9 @@ class SplashViewModel(
 
     /** Step 4: Load remote config then navigate to main screen */
     private suspend fun loadRemoteConfigAndProceed() {
-        val deviceId = deviceRepo.getDeviceId()
+        val deviceId = deviceRepo.getStableDeviceId()
         val authResult = authRepo.loginDevice(deviceId)
+        Log.i(TAG, "Device login result: $authResult")
         if (authResult is NetworkResult.Error) {
             _uiState.value = SplashUiState(
                 isLoading = false,
@@ -127,7 +130,27 @@ class SplashViewModel(
             return
         }
 
-        deviceRepo.updateDeviceDetails()
+        val updateDeviceResult = deviceRepo.updateDeviceDetails()
+        Log.i(TAG, "Device telemetry update result: $updateDeviceResult")
+        if (updateDeviceResult is NetworkResult.Error) {
+            _uiState.value = SplashUiState(
+                isLoading = false,
+                showCompanyCodeInput = true,
+                error = updateDeviceResult.message
+            )
+            return
+        }
+        if (updateDeviceResult is NetworkResult.NoInternet) {
+            _uiState.value = SplashUiState(
+                isLoading = false,
+                showCompanyCodeInput = true,
+                error = "No internet connection"
+            )
+            return
+        }
+        val serverDeviceId = appPrefs.serverDeviceId.first()
+        Log.i(TAG, "serverDeviceId after telemetry update: $serverDeviceId")
+
         deviceRepo.loadRemoteConfig()
         _uiState.value = SplashUiState(
             isLoading = false,
@@ -138,5 +161,9 @@ class SplashViewModel(
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    companion object {
+        private const val TAG = "SplashViewModel"
     }
 }

@@ -3,6 +3,7 @@ package com.example.mydevice.data.repository
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import com.example.mydevice.data.local.database.dao.DeviceStatusLogDao
 import com.example.mydevice.data.local.database.entity.DeviceStatusLogEntity
 import com.example.mydevice.data.local.preferences.AppPreferences
@@ -27,20 +28,44 @@ class DeviceRepository(
     private val statusLogDao: DeviceStatusLogDao,
     private val appPrefs: AppPreferences
 ) {
-    /** Get this device's unique ID (ANDROID_ID) */
+    /** Get the raw current device ID from Android settings. */
     fun getDeviceId(): String {
         return Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
             ?: "Unknown"
+    }
+
+    /**
+     * Returns the device key used with the backend.
+     *
+     * If the current raw Android ID differs from the previously stored device ID,
+     * prefer the current raw ID and persist it so the app re-registers using the
+     * identity reported by the current device.
+     */
+    suspend fun getStableDeviceId(): String {
+        val stored = appPrefs.deviceId.first()
+        val raw = getDeviceId()
+        val hasUsableRaw = raw.isNotBlank() && raw != "Unknown"
+
+        if (hasUsableRaw && raw != stored) {
+            Log.i(TAG, "Device ID changed. stored=$stored, current=$raw. Persisting current device ID.")
+            appPrefs.setDeviceId(raw)
+            appPrefs.setServerDeviceId(0)
+            return raw
+        }
+
+        if (stored.isNotBlank()) return stored
+        return raw
     }
 
     /** POST device telemetry to server */
     suspend fun updateDeviceDetails(): NetworkResult<DeviceResponse> {
         val deviceInfo = DeviceInfoUtil.collect(context)
         val companyName = appPrefs.companyName.first()
+        val stableDeviceId = getStableDeviceId()
         val request = DeviceRequest(
             image = "",
             deviceModel = Build.MODEL,
-            macAddress = getDeviceId(),
+            macAddress = stableDeviceId,
             os = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
             appVersion = deviceInfo.appVersion,
             username = "",
@@ -66,7 +91,7 @@ class DeviceRepository(
 
     /** Fetch remote configuration flags from server */
     suspend fun loadRemoteConfig(): NetworkResult<DeviceConfigurationResponse> {
-        val result = safeApiCall { api.getDeviceConfiguration(getDeviceId()) }
+        val result = safeApiCall { api.getDeviceConfiguration(getStableDeviceId()) }
         if (result is NetworkResult.Success) {
             val config = result.data
             appPrefs.setShowCheckInView(config.showCheckInView)
@@ -102,7 +127,7 @@ class DeviceRepository(
                 time = entity.time
             )
         }
-        val result = safeApiCall { api.addStatusLogs(getDeviceId(), requests) }
+        val result = safeApiCall { api.addStatusLogs(getStableDeviceId(), requests) }
         if (result is NetworkResult.Success) {
             statusLogDao.deleteByIds(pending.map { it.id })
         }
@@ -110,4 +135,8 @@ class DeviceRepository(
     }
 
     suspend fun getPendingLogCount(): Int = statusLogDao.count()
+
+    companion object {
+        private const val TAG = "DeviceRepository"
+    }
 }
