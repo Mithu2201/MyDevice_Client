@@ -48,6 +48,7 @@ fun KioskScreen(
     onNavigateToMessages: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToCharging: () -> Unit = {},
+    onLogout: () -> Unit = {},
     viewModel: KioskViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -69,6 +70,7 @@ fun KioskScreen(
                 if (activity != null) {
                     viewModel.deactivateKiosk(activity)
                 }
+                onLogout()
             }
         )
     }
