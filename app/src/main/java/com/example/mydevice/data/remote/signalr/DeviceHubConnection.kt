@@ -71,6 +71,10 @@ class DeviceHubConnection(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         }
         val token = securePreferences.accessToken
+        Log.i(
+            TAG,
+            "Preparing SignalR connection for registrationId=$deviceId, hasToken=${!token.isNullOrBlank()}"
+        )
 
         val builder = HubConnectionBuilder.create(Constants.SIGNALR_HUB_URL)
             .withTransport(TransportEnum.WEBSOCKETS)
@@ -107,8 +111,10 @@ class DeviceHubConnection(
 
         hub.on(Constants.SignalREvents.SEND_MESSAGE, { payload ->
             scope.launch {
+                Log.i(TAG, "SignalR message received: id=${payload.id}, from=${payload.sendBy}")
                 _messageCommand.emit(payload)
                 hub.send(Constants.SignalRMethods.MESSAGE_RECEIVED, payload.id)
+                Log.i(TAG, "SignalR message ack sent: id=${payload.id}")
             }
         }, SignalRMessage::class.java)
 
@@ -143,7 +149,7 @@ class DeviceHubConnection(
                 _connectionState.value = HubConnectionState.CONNECTED
                 retryIndex = 0
                 hubConnection?.send(Constants.SignalRMethods.ADD_DEVICE_ID, deviceId)
-                Log.i(TAG, "SignalR connected, registered device: $deviceId")
+                Log.i(TAG, "SignalR connected, AddDeviceId sent with registrationId=$deviceId")
             } catch (e: Exception) {
                 Log.e(TAG, "SignalR connect failed: ${e.message}")
                 _connectionState.value = HubConnectionState.DISCONNECTED

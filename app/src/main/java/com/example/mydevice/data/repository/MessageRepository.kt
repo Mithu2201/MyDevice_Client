@@ -21,6 +21,11 @@ class MessageRepository(
     private val messageDao: IncomingMessageDao,
     private val api: MyDevicesApi
 ) {
+    data class MessageSyncResult(
+        val newCount: Int,
+        val latestPreview: String?
+    )
+
     fun getAllMessages(): Flow<List<IncomingMessageEntity>> =
         messageDao.getAllMessages()
 
@@ -31,13 +36,14 @@ class MessageRepository(
         messageDao.getUnreadCount()
 
     suspend fun saveMessage(msg: SignalRMessage) {
+        val normalized = msg.normalized()
         messageDao.insert(
             IncomingMessageEntity(
-                id = msg.id.toString(),
-                sendBy = msg.sendBy,
-                description = msg.description,
-                sentAt = msg.sentAt.ifBlank { Instant.now().toString() },
-                receivedAt = msg.receivedAt.ifBlank { Instant.now().toString() }
+                id = normalized.id.toString(),
+                sendBy = normalized.sendBy,
+                description = normalized.description,
+                sentAt = normalized.sentAt,
+                receivedAt = normalized.receivedAt
             )
         )
     }
@@ -50,17 +56,30 @@ class MessageRepository(
 
     /**
      * REST fallback for environments where SignalR push is unreliable.
-     * The backend response shape is not strongly documented, so this parser
-     * accepts either a bare array or a wrapped object with data/items/results.
+     * The backend endpoint fetches pending messages by device macAddress/local ID.
+     * The response shape is not strongly documented, so this parser accepts
+     * either a bare array or a wrapped object with data/items/results.
      */
-    suspend fun syncMessages(deviceServerId: Int): NetworkResult<Int> {
-        if (deviceServerId <= 0) return NetworkResult.Success(0)
+    suspend fun syncMessages(macAddress: String): NetworkResult<MessageSyncResult> {
+        if (macAddress.isBlank()) return NetworkResult.Success(MessageSyncResult(0, null))
 
         return safeApiCall {
-            val raw = api.getMessagesRaw(deviceServerId)
+            val raw = api.getDeviceMessagesRaw(macAddress)
             val messages = parseMessages(raw)
-            messages.forEach { messageDao.insert(it.toEntity()) }
-            messages.size
+            var newCount = 0
+            var latestPreview: String? = null
+            messages.forEach { message ->
+                val entity = message.toEntity()
+                val exists = messageDao.exists(entity.id)
+                messageDao.insert(entity)
+                if (!exists) {
+                    newCount++
+                    if (latestPreview.isNullOrBlank()) {
+                        latestPreview = entity.description.takeIf { it.isNotBlank() }
+                    }
+                }
+            }
+            MessageSyncResult(newCount = newCount, latestPreview = latestPreview)
         }
     }
 
@@ -106,23 +125,48 @@ class MessageRepository(
             messages += SignalRMessage(
                 id = item.optInt("id", 0),
                 mobileStatusId = item.optInt("mobileStatusId", 0),
-                sendBy = item.optString("sendBy", ""),
-                description = item.optString("description", ""),
+                sendBy = item.optNullableString("sendBy"),
+                description = item.optNullableString("description"),
                 isSent = item.optBoolean("isSent", false),
-                sentAt = item.optString("sentAt", ""),
-                receivedAt = item.optString("receivedAt", "")
-            )
+                sentAt = item.optNullableString("sentAt"),
+                receivedAt = item.optNullableString("receivedAt")
+            ).normalized()
         }
         return messages
     }
 
     private fun SignalRMessage.toEntity(): IncomingMessageEntity {
+        val normalized = normalized()
         return IncomingMessageEntity(
-            id = id.toString(),
-            sendBy = sendBy,
-            description = description,
-            sentAt = sentAt.ifBlank { Instant.now().toString() },
-            receivedAt = receivedAt.ifBlank { Instant.now().toString() }
+            id = normalized.id.toString(),
+            sendBy = normalized.sendBy,
+            description = normalized.description,
+            sentAt = normalized.sentAt,
+            receivedAt = normalized.receivedAt
         )
     }
+
+    private fun SignalRMessage.normalized(): SignalRMessage {
+        val normalizedSentAt = sentAt.cleanTimestamp().ifBlank { Instant.now().toString() }
+        val normalizedReceivedAt = receivedAt.cleanTimestamp().ifBlank { normalizedSentAt }
+        return copy(
+            sendBy = sendBy.cleanText().ifBlank { "Admin" },
+            description = description.cleanText(),
+            sentAt = normalizedSentAt,
+            receivedAt = normalizedReceivedAt
+        )
+    }
+
+    private fun String.cleanText(): String {
+        val value = trim()
+        return if (value.equals("null", ignoreCase = true)) "" else value
+    }
+
+    private fun String.cleanTimestamp(): String {
+        val value = cleanText()
+        return if (value.startsWith("0001-01-01T00:00:00")) "" else value
+    }
+
+    private fun JSONObject.optNullableString(key: String): String =
+        if (!has(key) || isNull(key)) "" else optString(key, "")
 }

@@ -22,6 +22,9 @@ interface IncomingMessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(message: IncomingMessageEntity)
 
+    @Query("SELECT EXISTS(SELECT 1 FROM incoming_messages WHERE id = :messageId)")
+    suspend fun exists(messageId: String): Boolean
+
     @Query("UPDATE incoming_messages SET isRead = 1 WHERE id = :messageId")
     suspend fun markAsRead(messageId: String)
 

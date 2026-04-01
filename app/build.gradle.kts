@@ -33,6 +33,12 @@ android {
         release {
             isMinifyEnabled = true
             signingConfig = signingConfigs.getByName("release")
+            // Some x86_64 devices/emulators fail while installing embedded ART
+            // baseline profiles from release APKs. Disable install-time baseline
+            // profile handling so the signed APK installs reliably.
+            installation {
+                enableBaselineProfile = false
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

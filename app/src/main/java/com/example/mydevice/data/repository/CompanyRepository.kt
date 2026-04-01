@@ -24,6 +24,7 @@ class CompanyRepository(
     suspend fun autoRegister(deviceId: String): NetworkResult<CompanyResponse> {
         val result = safeApiCall { api.getCompanyByDeviceId(deviceId) }
         if (result is NetworkResult.Success) {
+            appPrefs.setDeviceId(deviceId)
             saveCompany(result.data)
         }
         return result
@@ -43,6 +44,7 @@ class CompanyRepository(
             )
         }
         if (result is NetworkResult.Success) {
+            appPrefs.setDeviceId(deviceId)
             appPrefs.setCompanyId(companyId)
         }
         return result

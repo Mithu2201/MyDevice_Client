@@ -59,7 +59,7 @@ class CheckInViewModel(
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-            val deviceId = deviceRepo.getDeviceId()
+            val deviceId = deviceRepo.getStableDeviceId()
 
             when (val result = authRepo.login(pin, deviceId)) {
                 is NetworkResult.Success -> {
