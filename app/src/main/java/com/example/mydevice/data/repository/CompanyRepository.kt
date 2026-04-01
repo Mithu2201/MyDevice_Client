@@ -5,6 +5,7 @@ import com.example.mydevice.data.remote.api.MyDevicesApi
 import com.example.mydevice.data.remote.api.NetworkResult
 import com.example.mydevice.data.remote.api.safeApiCall
 import com.example.mydevice.data.remote.dto.AddDeviceToCompanyRequest
+import com.example.mydevice.data.remote.dto.ApiSuccessResponse
 import com.example.mydevice.data.remote.dto.CompanyResponse
 
 /**
@@ -12,7 +13,7 @@ import com.example.mydevice.data.remote.dto.CompanyResponse
  *
  * REGISTRATION FLOW:
  * 1. First try auto-register by MAC/device ID → getCompanyByDeviceId()
- * 2. If that fails, user enters a company code → addDeviceToCompany()
+ * 2. If that fails, user enters a company id → addDeviceToCompany()
  * 3. On success, company ID is stored in DataStore
  */
 class CompanyRepository(
@@ -28,23 +29,21 @@ class CompanyRepository(
         return result
     }
 
-    /** Register device with company using a company code */
-    suspend fun registerWithCode(
+    /** Register device with company using a company id */
+    suspend fun registerWithCompanyId(
         deviceId: String,
-        companyCode: String,
-        deviceModel: String? = null
-    ): NetworkResult<CompanyResponse> {
+        companyId: Int
+    ): NetworkResult<ApiSuccessResponse<Unit>> {
         val result = safeApiCall {
             api.addDeviceToCompany(
                 AddDeviceToCompanyRequest(
-                    macAddress = deviceId,
-                    companyCode = companyCode,
-                    deviceModel = deviceModel
+                    companyId = companyId,
+                    deviceId = deviceId
                 )
             )
         }
         if (result is NetworkResult.Success) {
-            saveCompany(result.data)
+            appPrefs.setCompanyId(companyId)
         }
         return result
     }

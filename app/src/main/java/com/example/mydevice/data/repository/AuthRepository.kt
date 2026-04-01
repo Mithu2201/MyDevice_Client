@@ -7,6 +7,7 @@ import com.example.mydevice.data.local.preferences.SecurePreferences
 import com.example.mydevice.data.remote.api.MyDevicesApi
 import com.example.mydevice.data.remote.api.NetworkResult
 import com.example.mydevice.data.remote.api.safeApiCall
+import com.example.mydevice.data.remote.dto.DeviceLoginRequest
 import com.example.mydevice.data.remote.dto.LoginRequest
 import com.example.mydevice.data.remote.dto.LoginResponse
 import com.example.mydevice.data.remote.dto.UserDto
@@ -30,13 +31,30 @@ class AuthRepository(
     /** Online PIN login via REST API */
     suspend fun login(pin: String, deviceId: String): NetworkResult<LoginResponse> {
         val result = safeApiCall {
-            api.login(LoginRequest(pin = pin, deviceId = deviceId))
+            val response = api.login(LoginRequest(pin = pin, deviceId = deviceId))
+            response.data ?: throw IllegalStateException(
+                response.message ?: "Login response did not include token data"
+            )
         }
         if (result is NetworkResult.Success) {
-            securePrefs.accessToken = result.data.accessToken
-            securePrefs.refreshToken = result.data.refreshToken
-            securePrefs.currentUserId = result.data.userId
-            securePrefs.currentUsername = result.data.username
+            saveLogin(result.data)
+        }
+        return result
+    }
+
+    /**
+     * Device/service authentication used for kiosk-only devices that do not
+     * expose a user PIN login. The backend issues a JWT based on macAddress.
+     */
+    suspend fun loginDevice(macAddress: String): NetworkResult<LoginResponse> {
+        val result = safeApiCall {
+            val response = api.deviceLogin(DeviceLoginRequest(macAddress = macAddress))
+            response.data ?: throw IllegalStateException(
+                response.message ?: "Device login response did not include token data"
+            )
+        }
+        if (result is NetworkResult.Success) {
+            saveLogin(result.data)
         }
         return result
     }
@@ -80,4 +98,13 @@ class AuthRepository(
     }
 
     fun getCurrentUsername(): String? = securePrefs.currentUsername
+
+    private fun saveLogin(response: LoginResponse) {
+        val accessToken = response.accessToken ?: response.token
+        require(!accessToken.isNullOrBlank()) { "Login token is missing in response" }
+        securePrefs.accessToken = accessToken
+        securePrefs.refreshToken = response.refreshToken
+        securePrefs.currentUserId = response.userId
+        securePrefs.currentUsername = response.username ?: response.user ?: "device"
+    }
 }

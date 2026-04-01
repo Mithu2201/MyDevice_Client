@@ -3,6 +3,7 @@ package com.example.mydevice.ui.splash
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mydevice.data.remote.api.NetworkResult
+import com.example.mydevice.data.repository.AuthRepository
 import com.example.mydevice.data.repository.CompanyRepository
 import com.example.mydevice.data.repository.DeviceRepository
 import com.example.mydevice.data.local.preferences.AppPreferences
@@ -17,7 +18,7 @@ import kotlinx.coroutines.launch
  * Loading → CheckingRegistration → (already registered?) → NavigateToMain
  *                                → (not registered?) → ShowCompanyCodeInput
  *                                → (auto-register success?) → NavigateToMain
- * ShowCompanyCodeInput → user enters code → Registering → NavigateToMain / Error
+ * ShowCompanyIdInput → user enters company id → Registering → NavigateToMain / Error
  */
 data class SplashUiState(
     val isLoading: Boolean = true,
@@ -31,7 +32,8 @@ data class SplashUiState(
 class SplashViewModel(
     private val companyRepo: CompanyRepository,
     private val deviceRepo: DeviceRepository,
-    private val appPrefs: AppPreferences
+    private val appPrefs: AppPreferences,
+    private val authRepo: AuthRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SplashUiState())
@@ -71,13 +73,21 @@ class SplashViewModel(
         }
     }
 
-    /** Step 3 (manual path): User enters a company code */
-    fun registerWithCode(companyCode: String) {
+    /** Step 3 (manual path): User enters a company id */
+    fun registerWithCompanyId(companyIdText: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isRegistering = true, error = null)
             val deviceId = deviceRepo.getDeviceId()
+            val companyId = companyIdText.toIntOrNull()
+            if (companyId == null || companyId <= 0) {
+                _uiState.value = _uiState.value.copy(
+                    isRegistering = false,
+                    error = "Enter a valid company ID"
+                )
+                return@launch
+            }
 
-            when (val result = companyRepo.registerWithCode(deviceId, companyCode)) {
+            when (val result = companyRepo.registerWithCompanyId(deviceId, companyId)) {
                 is NetworkResult.Success -> loadRemoteConfigAndProceed()
                 is NetworkResult.Error -> {
                     _uiState.value = _uiState.value.copy(
@@ -98,6 +108,25 @@ class SplashViewModel(
 
     /** Step 4: Load remote config then navigate to main screen */
     private suspend fun loadRemoteConfigAndProceed() {
+        val deviceId = deviceRepo.getDeviceId()
+        val authResult = authRepo.loginDevice(deviceId)
+        if (authResult is NetworkResult.Error) {
+            _uiState.value = SplashUiState(
+                isLoading = false,
+                showCompanyCodeInput = true,
+                error = authResult.message
+            )
+            return
+        }
+        if (authResult is NetworkResult.NoInternet) {
+            _uiState.value = SplashUiState(
+                isLoading = false,
+                showCompanyCodeInput = true,
+                error = "No internet connection"
+            )
+            return
+        }
+
         deviceRepo.updateDeviceDetails()
         deviceRepo.loadRemoteConfig()
         _uiState.value = SplashUiState(

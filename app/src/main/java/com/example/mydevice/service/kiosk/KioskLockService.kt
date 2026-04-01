@@ -5,14 +5,16 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
-import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.mydevice.MainActivity
 import com.example.mydevice.R
+import java.util.Collections
 
 /**
  * Foreground service that enforces kiosk mode by monitoring which app is
@@ -24,7 +26,9 @@ import com.example.mydevice.R
  */
 class KioskLockService : Service() {
 
-    private val handler = Handler(Looper.getMainLooper())
+    // Dedicated background thread so UsageStats queries never touch the main looper
+    private val handlerThread = HandlerThread("KioskLockThread")
+    private lateinit var handler: Handler
     private var isRunning = false
 
     private val checkRunnable = object : Runnable {
@@ -37,6 +41,8 @@ class KioskLockService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        handlerThread.start()
+        handler = Handler(handlerThread.looper)
         createNotificationChannel()
     }
 
@@ -66,7 +72,16 @@ class KioskLockService : Service() {
         whitelistedPackages.addAll(SYSTEM_ALWAYS_ALLOWED)
         whitelistedPackages.add(packageName)
 
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // Android 14 (API 34) requires the service type to be passed explicitly.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         isRunning = true
         handler.post(checkRunnable)
         Log.i(TAG, "Kiosk lock service started with ${whitelistedPackages.size} whitelisted packages")
@@ -76,6 +91,7 @@ class KioskLockService : Service() {
     override fun onDestroy() {
         isRunning = false
         handler.removeCallbacks(checkRunnable)
+        handlerThread.quitSafely()
         Log.i(TAG, "Kiosk lock service stopped")
         super.onDestroy()
     }
@@ -157,7 +173,8 @@ class KioskLockService : Service() {
         const val ACTION_UPDATE_WHITELIST = "com.example.mydevice.UPDATE_WHITELIST"
         const val EXTRA_PACKAGES = "extra_packages"
 
-        private val whitelistedPackages = mutableSetOf<String>()
+        private val whitelistedPackages: MutableSet<String> =
+            Collections.synchronizedSet(mutableSetOf())
 
         private val SYSTEM_ALWAYS_ALLOWED = setOf(
             "com.android.systemui",

@@ -1,13 +1,19 @@
 package com.example.mydevice.ui.kiosk
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.os.Build
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -22,11 +28,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun KioskScreen(
     onNavigateToMessages: () -> Unit,
@@ -38,6 +46,7 @@ fun KioskScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = context as? Activity
+    var showExitPinDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (activity != null) {
@@ -45,11 +54,30 @@ fun KioskScreen(
         }
     }
 
+    // Exit PIN dialog — shown on long-press of the title bar
+    if (showExitPinDialog) {
+        ExitPinDialog(
+            onDismiss = { showExitPinDialog = false },
+            onConfirm = {
+                showExitPinDialog = false
+                onLogout()
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    // Long-press the title to open the admin exit dialog
+                    Column(
+                        modifier = Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = { showExitPinDialog = true },
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        )
+                    ) {
                         Text(
                             text = uiState.companyName.ifEmpty { "MyDevice" },
                             style = MaterialTheme.typography.titleLarge,
@@ -164,6 +192,166 @@ fun KioskScreen(
     }
 }
 
+/**
+ * Admin exit dialog with a 4-digit PIN pad.
+ *
+ * Triggered by long-pressing the kiosk title bar.
+ * UI only — wire real PIN validation in [onConfirm] when ready.
+ */
+@Composable
+private fun ExitPinDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    val pinLength = 4
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Header
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(52.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.AdminPanelSettings,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                Text(
+                    text = "Admin Exit",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Enter the 4-digit PIN to exit kiosk mode",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(Modifier.height(24.dp))
+
+                // PIN dot indicators
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    repeat(pinLength) { index ->
+                        Box(
+                            modifier = Modifier
+                                .size(15.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (index < pin.length)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                )
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(22.dp))
+
+                // Numpad
+                val numpadRows = listOf(
+                    listOf("1", "2", "3"),
+                    listOf("4", "5", "6"),
+                    listOf("7", "8", "9"),
+                    listOf("⌫", "0", "✓")
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    numpadRows.forEach { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            row.forEach { key ->
+                                when (key) {
+                                    "⌫" -> OutlinedButton(
+                                        onClick = {
+                                            if (pin.isNotEmpty()) pin = pin.dropLast(1)
+                                        },
+                                        modifier = Modifier.weight(1f).height(52.dp),
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Backspace,
+                                            contentDescription = "Delete",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    "✓" -> Button(
+                                        onClick = {
+                                            if (pin.length == pinLength) {
+                                                // TODO: validate against stored admin PIN
+                                                onConfirm()
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f).height(52.dp),
+                                        shape = RoundedCornerShape(14.dp),
+                                        enabled = pin.length == pinLength
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = "Confirm",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    else -> OutlinedButton(
+                                        onClick = {
+                                            if (pin.length < pinLength) pin += key
+                                        },
+                                        modifier = Modifier.weight(1f).height(52.dp),
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) {
+                                        Text(
+                                            text = key,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 18.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Cancel")
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KioskAppCard(
@@ -198,7 +386,15 @@ private fun KioskAppCard(
         ) {
             if (icon != null) {
                 val bitmap = remember(icon) {
-                    icon.toBitmap(width = 56, height = 56)
+                    val software = icon.toBitmap(width = 56, height = 56)
+                    // Hardware bitmaps live in GPU memory and bypass the deprecated
+                    // Bitmap.prepareToDraw() pinning path (warned on Android Q+).
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        software.copy(Bitmap.Config.HARDWARE, false)
+                            .also { software.recycle() }
+                    } else {
+                        software
+                    }
                 }
                 Image(
                     bitmap = bitmap.asImageBitmap(),

@@ -4,17 +4,45 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class DeviceRequest(
+    val image: String = "",
+    val deviceModel: String = "",
     val macAddress: String,
-    val deviceModel: String? = null,
-    val osVersion: String? = null,
-    val appVersion: String? = null,
-    val ipAddress: String? = null,
-    val wifiSignalStrength: Int? = null,
-    val batteryLevel: Int? = null,
-    val isCharging: Boolean = false,
-    val installedApps: String? = null,
-    val companyId: Int = 0,
-    val lastSeen: String? = null
+    val os: String = "",
+    val appVersion: String = "",
+    val username: String = "",
+    val ipAddress: String = "",
+    val zone: String = "",
+    val signalStrength: String = "",
+    val lastConnected: String = "",
+    val bssid: String = "",
+    val linkSpeed: String = "",
+    val essid: String = "",
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val licenseNumber: String = "",
+    val installedApps: List<InstalledAppRequest> = emptyList(),
+    val appInfoList: List<AppInfoRequest> = emptyList()
+)
+
+@Serializable
+data class InstalledAppRequest(
+    val applicationName: String
+)
+
+@Serializable
+data class AppInfoRequest(
+    val id: Int = 0,
+    val name: String,
+    val packageName: String,
+    val version: String = "",
+    val minSDK: Int = 0,
+    val targetSDK: Int = 0,
+    val activities: String = "",
+    val receivers: String = "",
+    val isSystemApp: Boolean = false,
+    val firstInstallTime: String = "",
+    val lastUpdateTime: String = "",
+    val mobileStatusId: Int = 0
 )
 
 @Serializable

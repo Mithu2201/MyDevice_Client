@@ -53,6 +53,9 @@ fun MessagesScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.refreshFromServer() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
                     if (uiState.unreadCount > 0) {
                         TextButton(onClick = { viewModel.markAllAsRead() }) {
                             Text("Mark all read")

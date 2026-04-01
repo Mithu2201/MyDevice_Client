@@ -15,8 +15,7 @@ import com.example.mydevice.ui.splash.SplashScreen
  * Navigation routes for the app.
  *
  * FLOW:
- * Splash → (registered?) → CheckIn or Kiosk
- * CheckIn → (login success) → Kiosk
+ * Splash → (registered?) → Kiosk (PIN check-in bypassed for kiosk devices)
  * Kiosk → Messages / Settings / Charging
  * Any screen → (charger plugged in) → Charging
  * Charging → (unplugged) → back to previous
@@ -39,7 +38,7 @@ fun AppNavigation(navController: NavHostController) {
         composable(Routes.SPLASH) {
             SplashScreen(
                 onNavigateToCheckIn = {
-                    navController.navigate(Routes.CHECK_IN) {
+                    navController.navigate(Routes.KIOSK) {
                         popUpTo(Routes.SPLASH) { inclusive = true }
                     }
                 },
@@ -66,8 +65,9 @@ fun AppNavigation(navController: NavHostController) {
                 onNavigateToMessages = { navController.navigate(Routes.MESSAGES) },
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
                 onNavigateToCharging = { navController.navigate(Routes.CHARGING) },
+                // Logout goes to Splash (device re-registration), not the PIN screen
                 onLogout = {
-                    navController.navigate(Routes.CHECK_IN) {
+                    navController.navigate(Routes.SPLASH) {
                         popUpTo(Routes.KIOSK) { inclusive = true }
                     }
                 }
