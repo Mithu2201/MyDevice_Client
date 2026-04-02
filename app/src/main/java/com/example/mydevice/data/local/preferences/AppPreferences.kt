@@ -94,14 +94,35 @@ class AppPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_STATUS_INTERVAL] = minutes }
     }
 
+    /**
+     * When false (default), SignalR "Reboot" hub events are ignored.
+     * Prevents unintended [DevicePolicyManager.reboot] from noisy or mistaken server pushes.
+     */
+    val allowRemoteRebootFromHub: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_ALLOW_REMOTE_REBOOT] ?: false
+    }
+
+    suspend fun setAllowRemoteRebootFromHub(allow: Boolean) {
+        context.dataStore.edit { it[KEY_ALLOW_REMOTE_REBOOT] = allow }
+    }
+
     // ── Registration state helper ───────────────────────────────────────────
 
+    /** True only when a valid positive company ID is stored (0 and unset/-1 mean not enrolled). */
     val isRegistered: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        (prefs[KEY_COMPANY_ID] ?: Constants.DEFAULT_COMPANY_ID) != Constants.DEFAULT_COMPANY_ID
+        (prefs[KEY_COMPANY_ID] ?: Constants.DEFAULT_COMPANY_ID) > 0
     }
 
     suspend fun clearAll() {
         context.dataStore.edit { it.clear() }
+    }
+
+    /** Clears company/server IDs so the user can enter a new company ID on the splash screen. */
+    suspend fun clearCompanyEnrollment() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_COMPANY_ID] = Constants.DEFAULT_COMPANY_ID
+            prefs.remove(KEY_SERVER_DEVICE_ID)
+        }
     }
 
     companion object {
@@ -113,5 +134,6 @@ class AppPreferences(private val context: Context) {
         private val KEY_SHOW_CHARGING = booleanPreferencesKey("show_charging")
         private val KEY_INACTIVITY_TIMEOUT = intPreferencesKey("inactivity_timeout")
         private val KEY_STATUS_INTERVAL = intPreferencesKey("status_interval")
+        private val KEY_ALLOW_REMOTE_REBOOT = booleanPreferencesKey("allow_remote_reboot_hub")
     }
 }

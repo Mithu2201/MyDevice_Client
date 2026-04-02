@@ -70,27 +70,81 @@ class MyDevicesApi(private val client: HttpClient) {
     }
 
     private fun parseDeviceResponse(raw: String): DeviceResponse {
-        try {
-            return json.decodeFromString(DeviceResponse.serializer(), raw)
+        val decoded = try {
+            json.decodeFromString(DeviceResponse.serializer(), raw)
         } catch (_: Exception) {
-            val root = JSONObject(raw)
-            val payload = when {
-                root.has("data") && root.opt("data") is JSONObject -> root.getJSONObject("data")
-                root.has("result") && root.opt("result") is JSONObject -> root.getJSONObject("result")
-                else -> root
-            }
-            return DeviceResponse(
-                id = payload.optInt("id", 0),
-                macAddress = payload.optNullableString("macAddress"),
-                deviceModel = payload.optNullableString("deviceModel"),
-                osVersion = payload.optNullableString("osVersion"),
-                appVersion = payload.optNullableString("appVersion"),
-                ipAddress = payload.optNullableString("ipAddress"),
-                companyId = payload.optInt("companyId", 0),
-                lastSeen = payload.optNullableString("lastSeen"),
-                isOnline = payload.optBoolean("isOnline", false)
-            )
+            null
         }
+        val root = try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            return decoded ?: DeviceResponse()
+        }
+        val payload = when {
+            root.has("data") && root.opt("data") is JSONObject -> root.getJSONObject("data")
+            root.has("result") && root.opt("result") is JSONObject -> root.getJSONObject("result")
+            else -> root
+        }
+        val resolvedId = extractDeviceNumericId(payload)
+            .takeIf { it > 0 }
+            ?: decoded?.id?.takeIf { it > 0 }
+            ?: 0
+        if (resolvedId == 0) {
+            Log.w(TAG, "parseDeviceResponse: device id not found in JSON (check id/deviceId in api/Device response)")
+        }
+        return DeviceResponse(
+            id = resolvedId,
+            macAddress = payload.optNullableString("macAddress") ?: decoded?.macAddress,
+            deviceModel = payload.optNullableString("deviceModel") ?: decoded?.deviceModel,
+            osVersion = payload.optNullableString("osVersion") ?: decoded?.osVersion,
+            appVersion = payload.optNullableString("appVersion") ?: decoded?.appVersion,
+            ipAddress = payload.optNullableString("ipAddress") ?: decoded?.ipAddress,
+            companyId = extractCompanyIdFromPayload(payload, decoded),
+            lastSeen = payload.optNullableString("lastSeen") ?: decoded?.lastSeen,
+            isOnline = if (payload.has("isOnline")) {
+                payload.optBoolean("isOnline", false)
+            } else {
+                decoded?.isOnline ?: false
+            }
+        )
+    }
+
+    /** ASP.NET APIs often use deviceId or PascalCase names instead of id. */
+    private fun extractDeviceNumericId(obj: JSONObject): Int {
+        val keys = listOf(
+            "id", "deviceId", "deviceID", "DeviceId", "device_id", "DeviceID"
+        )
+        for (key in keys) {
+            if (!obj.has(key) || obj.isNull(key)) continue
+            when (val v = obj.opt(key)) {
+                is Int -> if (v > 0) return v
+                is Long -> if (v > 0) return v.toInt()
+                is Double -> if (v > 0) return v.toInt()
+                is Number -> {
+                    val n = v.toLong()
+                    if (n > 0) return n.toInt()
+                }
+                is String -> v.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+            }
+        }
+        return 0
+    }
+
+    private fun extractCompanyIdFromPayload(payload: JSONObject, decoded: DeviceResponse?): Int {
+        val keys = listOf("companyId", "CompanyId", "company_id")
+        for (key in keys) {
+            if (!payload.has(key) || payload.isNull(key)) continue
+            when (val v = payload.opt(key)) {
+                is Int -> if (v > 0) return v
+                is Long -> if (v > 0) return v.toInt()
+                is Number -> {
+                    val n = v.toLong()
+                    if (n > 0) return n.toInt()
+                }
+                is String -> v.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+            }
+        }
+        return decoded?.companyId ?: 0
     }
 
     private fun JSONObject.optNullableString(key: String): String? {
