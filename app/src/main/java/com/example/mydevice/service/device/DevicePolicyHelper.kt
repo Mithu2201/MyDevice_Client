@@ -125,10 +125,24 @@ class DevicePolicyHelper(private val context: Context) {
     /**
      * Hide all installed apps except the whitelisted ones.
      * Hidden apps remain installed but become invisible and unlanchable.
+     *
+     * **Never hide Google Play Services / telephony / core providers.** Hiding `com.google.android.gms`
+     * (or related packages) breaks Android Enterprise policy sync and can lead to **“Enterprise reset”**
+     * or recovery after a delay — the system expects GMS to keep running on managed devices.
      */
     fun hideNonWhitelistedApps(whitelistedPackages: Set<String>) {
         if (!isDeviceOwner()) {
             Log.w(TAG, "Cannot hide apps — not device owner")
+            return
+        }
+
+        if (shouldSkipMassAppHidingForOem()) {
+            Log.w(
+                TAG,
+                "Skipping mass app hide on this device (${Build.MANUFACTURER} ${Build.MODEL}) — " +
+                    "Honeywell / rugged OEMs ship many co-process services; hiding them breaks enterprise " +
+                    "policy and can trigger reset. Kiosk still uses lock task + KioskLockService."
+            )
             return
         }
 
@@ -142,27 +156,38 @@ class DevicePolicyHelper(private val context: Context) {
             add("com.android.providers.settings")
             add("com.android.shell")
             add("android")
+            addAll(PACKAGES_CRITICAL_FOR_ANDROID_ENTERPRISE)
             addAll(whitelistedPackages)
+        }
+
+        if (whitelistedPackages.isEmpty()) {
+            Log.w(
+                TAG,
+                "Kiosk whitelist is empty — still skipping critical enterprise/GMS packages; " +
+                    "consider adding approved apps in the admin panel."
+            )
         }
 
         var hiddenCount = 0
         for (app in installedApps) {
-            if (alwaysAllowed.contains(app.packageName)) continue
-            if (app.packageName.startsWith("com.android.inputmethod")) continue
-            if (app.packageName.contains("keyboard", ignoreCase = true)) continue
-            if (app.packageName.contains("inputmethod", ignoreCase = true)) continue
+            val pkg = app.packageName
+            if (alwaysAllowed.contains(pkg)) continue
+            if (isPackageCriticalForEnterprise(pkg)) continue
+            if (pkg.startsWith("com.android.inputmethod")) continue
+            if (pkg.contains("keyboard", ignoreCase = true)) continue
+            if (pkg.contains("inputmethod", ignoreCase = true)) continue
 
             try {
-                val wasHidden = dpm.isApplicationHidden(adminComponent, app.packageName)
+                val wasHidden = dpm.isApplicationHidden(adminComponent, pkg)
                 if (!wasHidden) {
-                    dpm.setApplicationHidden(adminComponent, app.packageName, true)
+                    dpm.setApplicationHidden(adminComponent, pkg, true)
                     hiddenCount++
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to hide ${app.packageName}", e)
+                Log.w(TAG, "Failed to hide $pkg", e)
             }
         }
-        Log.i(TAG, "Hidden $hiddenCount non-whitelisted apps")
+        Log.i(TAG, "Hidden $hiddenCount non-whitelisted apps (GMS / core packages never hidden)")
     }
 
     fun unhideApp(packageName: String) {
@@ -190,6 +215,30 @@ class DevicePolicyHelper(private val context: Context) {
     }
 
     // ── Device Restrictions (Device Owner only) ─────────────────────────────
+
+    /**
+     * Temporarily allow APK installs while kiosk restrictions are active.
+     * Called by ScriptRepository before silent install, restored after.
+     */
+    fun allowInstalls() {
+        if (!isDeviceOwner()) return
+        try {
+            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_INSTALL_APPS)
+            Log.i(TAG, "DISALLOW_INSTALL_APPS cleared for script install")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear install restriction", e)
+        }
+    }
+
+    fun blockInstalls() {
+        if (!isDeviceOwner()) return
+        try {
+            dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_INSTALL_APPS)
+            Log.i(TAG, "DISALLOW_INSTALL_APPS re-applied after script install")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to re-apply install restriction", e)
+        }
+    }
 
     fun applyKioskRestrictions() {
         if (!isDeviceOwner()) return
@@ -352,5 +401,70 @@ class DevicePolicyHelper(private val context: Context) {
 
     companion object {
         private const val TAG = "DevicePolicyHelper"
+
+        /**
+         * Must remain visible / not hidden — required for Android Enterprise, Play services,
+         * telephony stack, and policy sync. Hiding these commonly triggers OEM “enterprise reset” flows.
+         */
+        private val PACKAGES_CRITICAL_FOR_ANDROID_ENTERPRISE = setOf(
+            "com.google.android.gms",
+            "com.google.android.gsf",
+            "com.google.android.ext.services",
+            "com.google.android.permissioncontroller",
+            "com.google.android.as",
+            "com.android.phone",
+            "com.android.providers.telephony",
+            "com.android.server.telecom",
+            "com.android.cellbroadcastreceiver",
+            "com.android.cellbroadcastservice",
+            "com.android.providers.contacts",
+            "com.android.providers.blockednumber",
+            "com.google.android.providers.media.module",
+            "com.android.vending",
+            "com.google.android.webview",
+            "com.android.webview",
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller",
+            "com.android.dynsystem",
+            "com.android.providers.downloads",
+            "com.android.providers.downloads.ui",
+            // Samsung / Knox (common on enterprise devices)
+            "com.samsung.android.knox.containercore",
+            "com.samsung.android.knox.containeragent",
+            "com.samsung.android.knox.attestation",
+            "com.sec.enterprise.knox.cloudmdm.smdms",
+            "com.samsung.android.securitylogagent"
+        )
+
+        private fun isPackageCriticalForEnterprise(packageName: String): Boolean {
+            if (PACKAGES_CRITICAL_FOR_ANDROID_ENTERPRISE.contains(packageName)) return true
+            // GMS ships split / plugin packages under this prefix on many builds
+            if (packageName.startsWith("com.google.android.gms.")) return true
+            if (packageName.startsWith("com.google.android.odad")) return true
+            // Rugged / enterprise handheld OEMs (Honeywell CT40, Intermec, Zebra scanners, etc.)
+            if (packageName.startsWith("com.honeywell.", ignoreCase = true)) return true
+            if (packageName.startsWith("com.intermec.", ignoreCase = true)) return true
+            if (packageName.startsWith("com.symbol.", ignoreCase = true)) return true
+            if (packageName.startsWith("com.zebra.", ignoreCase = true)) return true
+            if (packageName.startsWith("com.datalogic.", ignoreCase = true)) return true
+            if (packageName.startsWith("com.panasonic.", ignoreCase = true)) return true
+            if (packageName.startsWith("com.urovo.", ignoreCase = true)) return true
+            return false
+        }
+
+        /**
+         * On Honeywell Dolphin CT4x and similar devices, mass-hiding “non-whitelisted” apps hides OEM
+         * services (scanner, MX layer, enterprise agents) that are not listed in Play-style manifests.
+         * That can pass emulator tests but fail on real hardware after policy sync — “Enterprise reset”.
+         */
+        private fun shouldSkipMassAppHidingForOem(): Boolean {
+            val m = "${Build.MANUFACTURER}|${Build.BRAND}|${Build.MODEL}|${Build.DEVICE}".lowercase()
+            if ("honeywell" in m) return true
+            if ("intermec" in m) return true
+            // Dolphin CT40 / CT45 / CT47 series product strings
+            if (m.contains("dolphin") && m.contains("ct")) return true
+            if (Regex("(^|[^a-z])ct4[0-9]", RegexOption.IGNORE_CASE).containsMatchIn(Build.MODEL)) return true
+            return false
+        }
     }
 }

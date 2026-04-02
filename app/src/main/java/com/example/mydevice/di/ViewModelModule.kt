@@ -21,7 +21,7 @@ import org.koin.dsl.module
 val viewModelModule = module {
     viewModel { SplashViewModel(get(), get(), get(), get()) }
     viewModel { CheckInViewModel(get(), get(), get()) }
-    viewModel { KioskViewModel(get(), get(), get(), get(), androidContext()) }
+    viewModel { KioskViewModel(get(), get(), get(), get(), get(), androidContext()) }
     viewModel { ChargingViewModel(get(), get()) }
     viewModel { MessagesViewModel(get(), get()) }
     viewModel { SettingsViewModel(get(), get()) }

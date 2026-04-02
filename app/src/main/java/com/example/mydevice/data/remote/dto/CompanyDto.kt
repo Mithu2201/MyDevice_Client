@@ -26,9 +26,16 @@ data class CompanyResponse(
 @Serializable
 data class KioskAppDto(
     val id: Int = 0,
-    val packageName: String,
-    val appName: String? = null,
-    val iconUrl: String? = null,
-    val companyId: Int = 0,
-    val isActive: Boolean = true
+    val title: String? = null,
+    val icon: String? = null,
+    val type: String? = null,
+    val autoLaunch: Boolean = false,
+    val vpnConnect: Boolean = false,
+    val visible: Boolean = false,
+    val label: String? = null,
+    val activity: String? = null,
+    val folderId: Int? = null,
+    val folderOrder: Int = 0,
+    val packageName: String = "",
+    val companyId: Int = 0
 )

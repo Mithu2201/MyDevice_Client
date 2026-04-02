@@ -1,5 +1,6 @@
 package com.example.mydevice.data.remote.api
 
+import android.util.Log
 import com.example.mydevice.data.remote.dto.*
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -8,6 +9,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.serialization.json.Json
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -68,27 +70,81 @@ class MyDevicesApi(private val client: HttpClient) {
     }
 
     private fun parseDeviceResponse(raw: String): DeviceResponse {
-        try {
-            return json.decodeFromString(DeviceResponse.serializer(), raw)
+        val decoded = try {
+            json.decodeFromString(DeviceResponse.serializer(), raw)
         } catch (_: Exception) {
-            val root = JSONObject(raw)
-            val payload = when {
-                root.has("data") && root.opt("data") is JSONObject -> root.getJSONObject("data")
-                root.has("result") && root.opt("result") is JSONObject -> root.getJSONObject("result")
-                else -> root
-            }
-            return DeviceResponse(
-                id = payload.optInt("id", 0),
-                macAddress = payload.optNullableString("macAddress"),
-                deviceModel = payload.optNullableString("deviceModel"),
-                osVersion = payload.optNullableString("osVersion"),
-                appVersion = payload.optNullableString("appVersion"),
-                ipAddress = payload.optNullableString("ipAddress"),
-                companyId = payload.optInt("companyId", 0),
-                lastSeen = payload.optNullableString("lastSeen"),
-                isOnline = payload.optBoolean("isOnline", false)
-            )
+            null
         }
+        val root = try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            return decoded ?: DeviceResponse()
+        }
+        val payload = when {
+            root.has("data") && root.opt("data") is JSONObject -> root.getJSONObject("data")
+            root.has("result") && root.opt("result") is JSONObject -> root.getJSONObject("result")
+            else -> root
+        }
+        val resolvedId = extractDeviceNumericId(payload)
+            .takeIf { it > 0 }
+            ?: decoded?.id?.takeIf { it > 0 }
+            ?: 0
+        if (resolvedId == 0) {
+            Log.w(TAG, "parseDeviceResponse: device id not found in JSON (check id/deviceId in api/Device response)")
+        }
+        return DeviceResponse(
+            id = resolvedId,
+            macAddress = payload.optNullableString("macAddress") ?: decoded?.macAddress,
+            deviceModel = payload.optNullableString("deviceModel") ?: decoded?.deviceModel,
+            osVersion = payload.optNullableString("osVersion") ?: decoded?.osVersion,
+            appVersion = payload.optNullableString("appVersion") ?: decoded?.appVersion,
+            ipAddress = payload.optNullableString("ipAddress") ?: decoded?.ipAddress,
+            companyId = extractCompanyIdFromPayload(payload, decoded),
+            lastSeen = payload.optNullableString("lastSeen") ?: decoded?.lastSeen,
+            isOnline = if (payload.has("isOnline")) {
+                payload.optBoolean("isOnline", false)
+            } else {
+                decoded?.isOnline ?: false
+            }
+        )
+    }
+
+    /** ASP.NET APIs often use deviceId or PascalCase names instead of id. */
+    private fun extractDeviceNumericId(obj: JSONObject): Int {
+        val keys = listOf(
+            "id", "deviceId", "deviceID", "DeviceId", "device_id", "DeviceID"
+        )
+        for (key in keys) {
+            if (!obj.has(key) || obj.isNull(key)) continue
+            when (val v = obj.opt(key)) {
+                is Int -> if (v > 0) return v
+                is Long -> if (v > 0) return v.toInt()
+                is Double -> if (v > 0) return v.toInt()
+                is Number -> {
+                    val n = v.toLong()
+                    if (n > 0) return n.toInt()
+                }
+                is String -> v.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+            }
+        }
+        return 0
+    }
+
+    private fun extractCompanyIdFromPayload(payload: JSONObject, decoded: DeviceResponse?): Int {
+        val keys = listOf("companyId", "CompanyId", "company_id")
+        for (key in keys) {
+            if (!payload.has(key) || payload.isNull(key)) continue
+            when (val v = payload.opt(key)) {
+                is Int -> if (v > 0) return v
+                is Long -> if (v > 0) return v.toInt()
+                is Number -> {
+                    val n = v.toLong()
+                    if (n > 0) return n.toInt()
+                }
+                is String -> v.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+            }
+        }
+        return decoded?.companyId ?: 0
     }
 
     private fun JSONObject.optNullableString(key: String): String? {
@@ -141,11 +197,68 @@ class MyDevicesApi(private val client: HttpClient) {
 
     // ──────────────────────────── Kiosk Apps ────────────────────────────────
 
-    /** GET api/CompanyKioskApp/companies/{id} — get whitelisted kiosk apps */
-    suspend fun getKioskAppsByCompany(companyId: Int): List<KioskAppDto> =
-        client.get("api/CompanyKioskApp/companies/$companyId").body()
+    /** GET api/CompanyKioskApp/companies/{id} — get approved kiosk apps */
+    suspend fun getKioskAppsByCompany(companyId: Int): List<KioskAppDto> {
+        val raw = client.get("api/CompanyKioskApp/companies/$companyId").bodyAsText()
+        return parseKioskAppsResponse(raw)
+    }
 
     /** GET api/DeviceKioskApp/device/{id} — get kiosk apps for specific device */
-    suspend fun getKioskAppsByDevice(deviceId: String): List<KioskAppDto> =
-        client.get("api/DeviceKioskApp/device/$deviceId").body()
+    suspend fun getKioskAppsByDevice(deviceId: String): List<KioskAppDto> {
+        val raw = client.get("api/DeviceKioskApp/device/$deviceId").bodyAsText()
+        return parseKioskAppsResponse(raw)
+    }
+
+    /**
+     * The server wraps responses in several shapes:
+     *   - { "success": true, "data": [ {...}, ... ] }   (list in wrapper)
+     *   - { "success": true, "data": { ... } }          (single item in wrapper)
+     *   - [ {...}, ... ]                                  (raw array)
+     * This parser handles all three.
+     */
+    private fun parseKioskAppsResponse(raw: String): List<KioskAppDto> {
+        val trimmed = raw.trim()
+        Log.d(TAG, "parseKioskAppsResponse raw length=${trimmed.length}")
+
+        val jsonArray: JSONArray = when {
+            trimmed.startsWith("[") -> JSONArray(trimmed)
+            trimmed.startsWith("{") -> {
+                val root = JSONObject(trimmed)
+                when {
+                    root.has("data") && root.opt("data") is JSONArray -> root.getJSONArray("data")
+                    root.has("data") && root.opt("data") is JSONObject -> JSONArray().put(root.getJSONObject("data"))
+                    else -> JSONArray().put(root)
+                }
+            }
+            else -> return emptyList()
+        }
+
+        return (0 until jsonArray.length()).mapNotNull { i ->
+            try {
+                val obj = jsonArray.getJSONObject(i)
+                KioskAppDto(
+                    id = obj.optInt("id", 0),
+                    title = obj.optNullableString("title"),
+                    icon = obj.optNullableString("icon"),
+                    type = obj.optNullableString("type"),
+                    autoLaunch = obj.optBoolean("autoLaunch", false),
+                    vpnConnect = obj.optBoolean("vpnConnect", false),
+                    visible = obj.optBoolean("visible", false),
+                    label = obj.optNullableString("label"),
+                    activity = obj.optNullableString("activity"),
+                    folderId = if (obj.isNull("folderId")) null else obj.optInt("folderId"),
+                    folderOrder = obj.optInt("folderOrder", 0),
+                    packageName = obj.optString("packageName", ""),
+                    companyId = obj.optInt("companyId", 0)
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse kiosk app at index $i", e)
+                null
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "MyDevicesApi"
+    }
 }

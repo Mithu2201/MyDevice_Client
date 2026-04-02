@@ -22,7 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -40,6 +41,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import coil.decode.BitmapFactoryDecoder
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -62,6 +67,11 @@ fun KioskScreen(
         }
     }
 
+    DisposableEffect(Unit) {
+        viewModel.startKioskBackgroundTasks()
+        onDispose { viewModel.stopKioskBackgroundTasks() }
+    }
+
     if (showExitDialog) {
         ExitKioskPinDialog(
             onDismiss = { showExitDialog = false },
@@ -79,8 +89,7 @@ fun KioskScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column(
-                    ) {
+                    Column {
                         Text(
                             text = uiState.companyName.ifEmpty { "MyDevice" },
                             style = MaterialTheme.typography.titleLarge,
@@ -165,15 +174,19 @@ fun KioskScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(uiState.apps) { app ->
-                        val isInstalled = viewModel.isAppInstalled(context, app.packageName)
-                        val icon = remember(app.packageName) {
+                    itemsIndexed(
+                        items = uiState.apps,
+                        key = { index, app -> "${app.id}_${index}_${app.packageName}" }
+                    ) { _, app ->
+                        val isInstalled =
+                            uiState.installedPackageNames.contains(app.packageName)
+                        val localIcon = remember(app.packageName, uiState.installSnapshotVersion) {
                             viewModel.getAppIcon(context, app.packageName)
                         }
                         KioskAppCard(
                             app = app,
                             isInstalled = isInstalled,
-                            icon = icon,
+                            localIcon = localIcon,
                             onClick = { viewModel.launchApp(context, app.packageName) }
                         )
                     }
@@ -181,17 +194,30 @@ fun KioskScreen(
             }
 
             if (uiState.error != null) {
+                val err = uiState.error!!
+                val needsCompanyRegistration =
+                    err.contains("Company not registered", ignoreCase = true) ||
+                        err.contains("invalid company", ignoreCase = true)
                 Snackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp),
                     action = {
-                        TextButton(onClick = { viewModel.refresh() }) {
-                            Text("Retry")
+                        Row {
+                            if (needsCompanyRegistration) {
+                                TextButton(
+                                    onClick = { viewModel.navigateToCompanyRegistration(onLogout) }
+                                ) {
+                                    Text("Enter company ID")
+                                }
+                            }
+                            TextButton(onClick = { viewModel.refresh() }) {
+                                Text("Retry")
+                            }
                         }
                     }
                 ) {
-                    Text(uiState.error!!)
+                    Text(err)
                 }
             }
         }
@@ -346,9 +372,11 @@ private fun ExitKioskPinDialog(
 private fun KioskAppCard(
     app: KioskApp,
     isInstalled: Boolean,
-    icon: Drawable?,
+    localIcon: Drawable?,
     onClick: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Card(
         onClick = onClick,
         modifier = Modifier
@@ -373,11 +401,33 @@ private fun KioskAppCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            if (icon != null) {
-                val bitmap = remember(icon) {
-                    val software = icon.toBitmap(width = 56, height = 56)
-                    // Hardware bitmaps live in GPU memory and bypass the deprecated
-                    // Bitmap.prepareToDraw() pinning path (warned on Android Q+).
+            val hasServerIcon = !app.iconUrl.isNullOrBlank()
+            var iconLoaded by remember { mutableStateOf(false) }
+
+            if (hasServerIcon) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(app.iconUrl)
+                        .crossfade(true)
+                        .allowHardware(false)
+                        .allowRgb565(true)
+                        .decoderFactory(BitmapFactoryDecoder.Factory())
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build(),
+                    contentDescription = app.appName,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop,
+                    onSuccess = { iconLoaded = true },
+                    onError = { iconLoaded = false }
+                )
+            }
+
+            if ((!hasServerIcon || !iconLoaded) && localIcon != null) {
+                val bitmap = remember(localIcon) {
+                    val software = localIcon.toBitmap(width = 56, height = 56)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         software.copy(Bitmap.Config.HARDWARE, false)
                             .also { software.recycle() }
@@ -392,7 +442,7 @@ private fun KioskAppCard(
                         .size(56.dp)
                         .clip(RoundedCornerShape(12.dp))
                 )
-            } else {
+            } else if (!hasServerIcon || !iconLoaded) {
                 Box(
                     modifier = Modifier
                         .size(56.dp)
@@ -420,12 +470,32 @@ private fun KioskAppCard(
                 overflow = TextOverflow.Ellipsis
             )
 
+            if (!app.label.isNullOrBlank() && app.label != app.appName) {
+                Text(
+                    text = app.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
             if (!isInstalled) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Not installed",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                )
+            }
+
+            if (app.autoLaunch) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Auto-launch",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
                 )
             }
         }
