@@ -101,6 +101,8 @@ class DeviceHubConnection(
     private fun registerListeners() {
         val hub = hubConnection ?: return
 
+        // Server → client "Reboot": MainActivity may call DevicePolicyManager.reboot (device owner).
+        // Execution is gated by AppPreferences.allowRemoteRebootFromHub (default false) + cooldown.
         hub.on(Constants.SignalREvents.REBOOT, {
             scope.launch { _rebootCommand.emit(Unit) }
         }, Void::class.java)

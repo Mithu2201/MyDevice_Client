@@ -86,6 +86,10 @@ class MainActivity : ComponentActivity() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var signalRCollectorsStarted = false
+
+    /** Last time we executed a SignalR-requested reboot (cooldown against duplicate events). */
+    @Volatile
+    private var lastRemoteRebootAtMs: Long = 0L
     private val deviceAdminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -360,7 +364,39 @@ class MainActivity : ComponentActivity() {
                 val conn = hubConnection ?: return@launch
                 conn.rebootCommand.collect {
                     try {
-                        if (dpmHelper.isDeviceOwner()) dpmHelper.rebootDevice()
+                        val prefs = appPrefs ?: run {
+                            Log.w(TAG, "SignalR Reboot ignored: AppPreferences unavailable")
+                            return@collect
+                        }
+                        val allowed = try {
+                            prefs.allowRemoteRebootFromHub.first()
+                        } catch (_: Exception) {
+                            false
+                        }
+                        if (!allowed) {
+                            Log.w(
+                                TAG,
+                                "SignalR Reboot event ignored — remote reboot disabled (Settings → Allow remote reboot). " +
+                                    "Server should not rely on implicit reboot; enable only if admins intentionally send Reboot."
+                            )
+                            return@collect
+                        }
+                        val now = System.currentTimeMillis()
+                        val cooldownMs = 30L * 60L * 1000L
+                        if (now - lastRemoteRebootAtMs < cooldownMs) {
+                            Log.w(
+                                TAG,
+                                "SignalR Reboot ignored — ${cooldownMs / 60000} min cooldown since last reboot command"
+                            )
+                            return@collect
+                        }
+                        lastRemoteRebootAtMs = now
+                        if (dpmHelper.isDeviceOwner()) {
+                            Log.i(TAG, "Executing DevicePolicyManager.reboot() after SignalR Reboot (allowed + cooldown OK)")
+                            dpmHelper.rebootDevice()
+                        } else {
+                            Log.w(TAG, "SignalR Reboot received but device is not device owner — cannot reboot")
+                        }
                     } catch (e: Exception) {
                         Log.w(TAG, "Error handling reboot command", e)
                     }

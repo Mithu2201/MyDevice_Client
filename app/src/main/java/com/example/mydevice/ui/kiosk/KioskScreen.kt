@@ -194,17 +194,30 @@ fun KioskScreen(
             }
 
             if (uiState.error != null) {
+                val err = uiState.error!!
+                val needsCompanyRegistration =
+                    err.contains("Company not registered", ignoreCase = true) ||
+                        err.contains("invalid company", ignoreCase = true)
                 Snackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp),
                     action = {
-                        TextButton(onClick = { viewModel.refresh() }) {
-                            Text("Retry")
+                        Row {
+                            if (needsCompanyRegistration) {
+                                TextButton(
+                                    onClick = { viewModel.navigateToCompanyRegistration(onLogout) }
+                                ) {
+                                    Text("Enter company ID")
+                                }
+                            }
+                            TextButton(onClick = { viewModel.refresh() }) {
+                                Text("Retry")
+                            }
                         }
                     }
                 ) {
-                    Text(uiState.error!!)
+                    Text(err)
                 }
             }
         }

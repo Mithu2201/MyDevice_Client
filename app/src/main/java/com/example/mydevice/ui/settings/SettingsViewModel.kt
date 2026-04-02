@@ -25,7 +25,9 @@ data class SettingsUiState(
     val syncResult: String? = null,
     val showCheckIn: Boolean = true,
     val showCharging: Boolean = true,
-    val inactivityMinutes: Int = 5
+    val inactivityMinutes: Int = 5,
+    /** When true, SignalR hub "Reboot" events may call DevicePolicyManager.reboot (default off). */
+    val allowRemoteRebootFromHub: Boolean = false
 )
 
 class SettingsViewModel(
@@ -48,7 +50,8 @@ class SettingsViewModel(
                 appPrefs.companyId,
                 appPrefs.showCheckInView,
                 appPrefs.showChargingView,
-                appPrefs.inactivityTimeoutMinutes
+                appPrefs.inactivityTimeoutMinutes,
+                appPrefs.allowRemoteRebootFromHub
             ) { values ->
                 _uiState.value.copy(
                     deviceId = values[0] as String,
@@ -56,7 +59,8 @@ class SettingsViewModel(
                     companyId = values[2] as Int,
                     showCheckIn = values[3] as Boolean,
                     showCharging = values[4] as Boolean,
-                    inactivityMinutes = values[5] as Int
+                    inactivityMinutes = values[5] as Int,
+                    allowRemoteRebootFromHub = values[6] as Boolean
                 )
             }.collect { state ->
                 val count = deviceRepo.getPendingLogCount()
@@ -107,6 +111,12 @@ class SettingsViewModel(
                 pendingLogs = count,
                 syncResult = "Event logs synced ($count remaining)"
             )
+        }
+    }
+
+    fun setAllowRemoteRebootFromHub(allow: Boolean) {
+        viewModelScope.launch {
+            appPrefs.setAllowRemoteRebootFromHub(allow)
         }
     }
 }

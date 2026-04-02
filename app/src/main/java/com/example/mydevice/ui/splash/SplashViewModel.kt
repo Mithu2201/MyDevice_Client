@@ -8,23 +8,21 @@ import com.example.mydevice.data.repository.AuthRepository
 import com.example.mydevice.data.repository.CompanyRepository
 import com.example.mydevice.data.repository.DeviceRepository
 import com.example.mydevice.data.local.preferences.AppPreferences
-import com.example.mydevice.util.Constants
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 /**
- * Drives the splash/registration screen.
+ * Drives the splash / device registration screen.
  *
- * STATE MACHINE:
- * Loading → CheckingRegistration → (already registered?) → NavigateToMain
- *                                → (not registered?) → ShowCompanyCodeInput
- *                                → (auto-register success?) → NavigateToMain
- * ShowCompanyIdInput → user enters company id → Registering → NavigateToMain / Error
+ * Enrollment uses the numeric **company ID** only (same value as the admin portal / backend).
+ * After QR provisioning, the user enters company ID here if auto-lookup by device fails.
  */
 data class SplashUiState(
     val isLoading: Boolean = true,
     val isRegistered: Boolean = false,
-    val showCompanyCodeInput: Boolean = false,
+    val showCompanyIdInput: Boolean = false,
+    /** When showing the registration card, pre-fill from prefs if a company ID was already stored */
+    val companyIdPrefill: String = "",
     val isRegistering: Boolean = false,
     val error: String? = null,
     val navigateToMain: Boolean = false
@@ -44,11 +42,11 @@ class SplashViewModel(
         checkRegistration()
     }
 
-    /** Step 1: Check if device is already registered with a company */
     private fun checkRegistration() {
         viewModelScope.launch {
             val companyId = appPrefs.companyId.first()
-            if (companyId != Constants.DEFAULT_COMPANY_ID) {
+            // Must use > 0: companyId 0 is invalid but (0 != -1) was true and skipped enrollment → kiosk showed "Company not registered"
+            if (companyId > 0) {
                 loadRemoteConfigAndProceed()
             } else {
                 tryAutoRegister()
@@ -56,25 +54,35 @@ class SplashViewModel(
         }
     }
 
-    /** Step 2: Try auto-register by device ID */
     private suspend fun tryAutoRegister() {
         val deviceId = deviceRepo.getStableDeviceId()
         appPrefs.setDeviceId(deviceId)
 
-        when (val result = companyRepo.autoRegister(deviceId)) {
+        when (companyRepo.autoRegister(deviceId)) {
             is NetworkResult.Success -> loadRemoteConfigAndProceed()
             is NetworkResult.Error,
             is NetworkResult.NoInternet -> {
-                _uiState.value = SplashUiState(
-                    isLoading = false,
-                    showCompanyCodeInput = true
-                )
+                showRegistrationCard(prefill = "", error = null)
             }
             is NetworkResult.Loading -> {}
         }
     }
 
-    /** Step 3 (manual path): User enters a company id */
+    private suspend fun showRegistrationCard(prefill: String, error: String?) {
+        val fromPrefs = appPrefs.companyId.first()
+        val resolvedPrefill = when {
+            prefill.isNotEmpty() -> prefill
+            fromPrefs > 0 -> fromPrefs.toString()
+            else -> ""
+        }
+        _uiState.value = SplashUiState(
+            isLoading = false,
+            showCompanyIdInput = true,
+            companyIdPrefill = resolvedPrefill,
+            error = error
+        )
+    }
+
     fun registerWithCompanyId(companyIdText: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isRegistering = true, error = null)
@@ -84,7 +92,7 @@ class SplashViewModel(
             if (companyId == null || companyId <= 0) {
                 _uiState.value = _uiState.value.copy(
                     isRegistering = false,
-                    error = "Enter a valid company ID"
+                    error = "Enter a valid company ID (positive number)"
                 )
                 return@launch
             }
@@ -94,7 +102,7 @@ class SplashViewModel(
                 is NetworkResult.Error -> {
                     _uiState.value = _uiState.value.copy(
                         isRegistering = false,
-                        error = result.message
+                        error = result.message.ifBlank { "Registration failed" }
                     )
                 }
                 is NetworkResult.NoInternet -> {
@@ -108,48 +116,53 @@ class SplashViewModel(
         }
     }
 
-    /** Step 4: Load remote config then navigate to main screen */
     private suspend fun loadRemoteConfigAndProceed() {
         val deviceId = deviceRepo.getStableDeviceId()
         val authResult = authRepo.loginDevice(deviceId)
         Log.i(TAG, "Device login result: $authResult")
         if (authResult is NetworkResult.Error) {
-            _uiState.value = SplashUiState(
-                isLoading = false,
-                showCompanyCodeInput = true,
+            showRegistrationCard(
+                prefill = appPrefs.companyId.first().takeIf { it > 0 }?.toString().orEmpty(),
                 error = authResult.message
             )
             return
         }
         if (authResult is NetworkResult.NoInternet) {
-            _uiState.value = SplashUiState(
-                isLoading = false,
-                showCompanyCodeInput = true,
-                error = "No internet connection"
-            )
+            showRegistrationCard(prefill = "", error = "No internet connection")
             return
         }
 
         val updateDeviceResult = deviceRepo.updateDeviceDetails()
         Log.i(TAG, "Device telemetry update result: $updateDeviceResult")
         if (updateDeviceResult is NetworkResult.Error) {
-            _uiState.value = SplashUiState(
-                isLoading = false,
-                showCompanyCodeInput = true,
+            showRegistrationCard(
+                prefill = appPrefs.companyId.first().takeIf { it > 0 }?.toString().orEmpty(),
                 error = updateDeviceResult.message
             )
             return
         }
         if (updateDeviceResult is NetworkResult.NoInternet) {
-            _uiState.value = SplashUiState(
-                isLoading = false,
-                showCompanyCodeInput = true,
-                error = "No internet connection"
+            showRegistrationCard(prefill = "", error = "No internet connection")
+            return
+        }
+
+        val enrolledCompanyId = appPrefs.companyId.first()
+        val backendDeviceId = appPrefs.serverDeviceId.first()
+        Log.i(TAG, "After telemetry: companyId=$enrolledCompanyId, serverDeviceId=$backendDeviceId")
+        if (enrolledCompanyId <= 0) {
+            showRegistrationCard(
+                prefill = "",
+                error = "Company ID missing. Enter your numeric company ID."
             )
             return
         }
-        val serverDeviceId = appPrefs.serverDeviceId.first()
-        Log.i(TAG, "serverDeviceId after telemetry update: $serverDeviceId")
+        // Telemetry already succeeded; some APIs omit numeric id or use names we don't parse — still allow kiosk
+        if (backendDeviceId <= 0) {
+            Log.w(
+                TAG,
+                "serverDeviceId is 0 after successful POST api/Device; continuing (hub may use MAC until id is returned)"
+            )
+        }
 
         deviceRepo.loadRemoteConfig()
         _uiState.value = SplashUiState(

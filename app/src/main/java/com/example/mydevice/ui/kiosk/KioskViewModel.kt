@@ -341,6 +341,23 @@ class KioskViewModel(
 
     fun refresh() = loadKioskApps()
 
+    /**
+     * Clears stored company/server IDs so splash shows the company ID enrollment card,
+     * then runs [onNavigate] (typically NavHost back to splash).
+     */
+    fun navigateToCompanyRegistration(onNavigate: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                appPrefs.clearCompanyEnrollment()
+            } catch (e: Exception) {
+                Log.w(TAG, "clearCompanyEnrollment failed", e)
+            }
+            withContext(Dispatchers.Main) {
+                onNavigate()
+            }
+        }
+    }
+
     override fun onCleared() {
         stopKioskBackgroundTasks()
         super.onCleared()
