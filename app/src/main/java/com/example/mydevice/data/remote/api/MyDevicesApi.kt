@@ -1,5 +1,6 @@
 package com.example.mydevice.data.remote.api
 
+import android.util.Log
 import com.example.mydevice.data.remote.dto.*
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -8,6 +9,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.serialization.json.Json
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -141,11 +143,68 @@ class MyDevicesApi(private val client: HttpClient) {
 
     // ──────────────────────────── Kiosk Apps ────────────────────────────────
 
-    /** GET api/CompanyKioskApp/companies/{id} — get whitelisted kiosk apps */
-    suspend fun getKioskAppsByCompany(companyId: Int): List<KioskAppDto> =
-        client.get("api/CompanyKioskApp/companies/$companyId").body()
+    /** GET api/CompanyKioskApp/companies/{id} — get approved kiosk apps */
+    suspend fun getKioskAppsByCompany(companyId: Int): List<KioskAppDto> {
+        val raw = client.get("api/CompanyKioskApp/companies/$companyId").bodyAsText()
+        return parseKioskAppsResponse(raw)
+    }
 
     /** GET api/DeviceKioskApp/device/{id} — get kiosk apps for specific device */
-    suspend fun getKioskAppsByDevice(deviceId: String): List<KioskAppDto> =
-        client.get("api/DeviceKioskApp/device/$deviceId").body()
+    suspend fun getKioskAppsByDevice(deviceId: String): List<KioskAppDto> {
+        val raw = client.get("api/DeviceKioskApp/device/$deviceId").bodyAsText()
+        return parseKioskAppsResponse(raw)
+    }
+
+    /**
+     * The server wraps responses in several shapes:
+     *   - { "success": true, "data": [ {...}, ... ] }   (list in wrapper)
+     *   - { "success": true, "data": { ... } }          (single item in wrapper)
+     *   - [ {...}, ... ]                                  (raw array)
+     * This parser handles all three.
+     */
+    private fun parseKioskAppsResponse(raw: String): List<KioskAppDto> {
+        val trimmed = raw.trim()
+        Log.d(TAG, "parseKioskAppsResponse raw length=${trimmed.length}")
+
+        val jsonArray: JSONArray = when {
+            trimmed.startsWith("[") -> JSONArray(trimmed)
+            trimmed.startsWith("{") -> {
+                val root = JSONObject(trimmed)
+                when {
+                    root.has("data") && root.opt("data") is JSONArray -> root.getJSONArray("data")
+                    root.has("data") && root.opt("data") is JSONObject -> JSONArray().put(root.getJSONObject("data"))
+                    else -> JSONArray().put(root)
+                }
+            }
+            else -> return emptyList()
+        }
+
+        return (0 until jsonArray.length()).mapNotNull { i ->
+            try {
+                val obj = jsonArray.getJSONObject(i)
+                KioskAppDto(
+                    id = obj.optInt("id", 0),
+                    title = obj.optNullableString("title"),
+                    icon = obj.optNullableString("icon"),
+                    type = obj.optNullableString("type"),
+                    autoLaunch = obj.optBoolean("autoLaunch", false),
+                    vpnConnect = obj.optBoolean("vpnConnect", false),
+                    visible = obj.optBoolean("visible", false),
+                    label = obj.optNullableString("label"),
+                    activity = obj.optNullableString("activity"),
+                    folderId = if (obj.isNull("folderId")) null else obj.optInt("folderId"),
+                    folderOrder = obj.optInt("folderOrder", 0),
+                    packageName = obj.optString("packageName", ""),
+                    companyId = obj.optInt("companyId", 0)
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse kiosk app at index $i", e)
+                null
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "MyDevicesApi"
+    }
 }

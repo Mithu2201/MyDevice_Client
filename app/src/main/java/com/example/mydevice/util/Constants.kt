@@ -12,6 +12,12 @@ object Constants {
     const val FILE_SYNC_INTERVAL_MINUTES = 30L
     const val KIOSK_APPS_REFRESH_INTERVAL_HOURS = 1L
 
+    /** How often to poll script/APK install while kiosk screen is visible (WorkManager min periodic is 15m). */
+    const val KIOSK_SCRIPT_SYNC_INTERVAL_MS = 3 * 60 * 1000L
+
+    /** How often to refresh “installed?” state on kiosk dashboard */
+    const val KIOSK_INSTALL_STATUS_POLL_MS = 4_000L
+
     const val INACTIVITY_TIMEOUT_MINUTES = 5
 
     const val HTTP_CALL_TIMEOUT_MS = 120_000L

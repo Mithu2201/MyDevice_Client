@@ -45,6 +45,9 @@
     <!-- Camera control via DevicePolicyManager -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Silent APK install (fallback for non-device-owner) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:name=".MyDeviceApp"
         android:allowBackup="true"
@@ -113,6 +116,22 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="systemExempted" />
+
+        <!-- FileProvider for APK install intent (non-device-owner fallback) -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Receives PackageInstaller session results for silent install -->
+        <receiver
+            android:name=".service.install.InstallResultReceiver"
+            android:exported="false" />
 
         <!-- Disable default WorkManagerInitializer so Koin can manage it -->
         <provider
