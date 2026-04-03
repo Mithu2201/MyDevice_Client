@@ -12,6 +12,12 @@ object Constants {
     const val FILE_SYNC_INTERVAL_MINUTES = 30L
     const val KIOSK_APPS_REFRESH_INTERVAL_HOURS = 1L
 
+    /** How often to poll script/APK install while kiosk screen is visible (WorkManager min periodic is 15m). */
+    const val KIOSK_SCRIPT_SYNC_INTERVAL_MS = 3 * 60 * 1000L
+
+    /** How often to refresh “installed?” state on kiosk dashboard */
+    const val KIOSK_INSTALL_STATUS_POLL_MS = 4_000L
+
     const val INACTIVITY_TIMEOUT_MINUTES = 5
 
     const val HTTP_CALL_TIMEOUT_MS = 120_000L
@@ -19,8 +25,11 @@ object Constants {
     const val HTTP_READ_TIMEOUT_MS = 30_000L
     const val HTTP_WRITE_TIMEOUT_MS = 30_000L
 
-    const val SIGNALR_SERVER_TIMEOUT_SECONDS = 30L
-    const val SIGNALR_KEEP_ALIVE_SECONDS = 20L
+    const val SIGNALR_SERVER_TIMEOUT_SECONDS = 60L
+    const val SIGNALR_KEEP_ALIVE_SECONDS = 15L
+
+    /** After fast backoff retries fail, wait this long before trying again (infinite loop). */
+    const val SIGNALR_LONG_RETRY_MS = 60_000L
 
     object EventTypes {
         const val LOGIN = "Login"

@@ -74,7 +74,9 @@ data class DeviceConfigDto(
     val id: Int = 0,
     val companyId: Int = 0,
     val name: String? = null,
-    val description: String? = null
+    val description: String? = null,
+    val configType: Int = 0,
+    val devicePath: String? = null
 )
 
 @Serializable
@@ -82,7 +84,11 @@ data class DeviceConfigFilePathDto(
     val id: Int = 0,
     val deviceConfigId: Int = 0,
     val filePath: String? = null,
-    val fileName: String? = null
+    val fileName: String? = null,
+    val name: String? = null,
+    val path: String? = null,
+    @kotlinx.serialization.SerialName("mD5Checksum")
+    val md5Checksum: String? = null
 )
 
 @Serializable

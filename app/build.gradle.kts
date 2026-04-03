@@ -105,6 +105,9 @@ dependencies {
     // SignalR Real-time
     implementation(libs.signalr)
 
+    // Zebra EMDK (remote reboot via PowerMgr profile — matches legacy mydevicesandroid)
+    implementation(libs.emdk)
+
     // DataStore + Encrypted Preferences
     implementation(libs.datastore.preferences)
     implementation(libs.security.crypto)

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?><!--This is an auto generated document. Changes to this document may cause incorrect behavior.--><wap-provisioningdoc>
+  <characteristic type="ProfileInfo">
+    <parm name="created_wizard_version" value="2.1.14"/>
+  </characteristic>
+  <characteristic type="Profile">
+    <parm name="ProfileName" value="WifiProfile-1"/>
+    <parm name="ModifiedDate" value="2014-08-04 12:46:43"/>
+    <characteristic type="Wi-Fi" version="2.7">
+      <parm name="emdk_name" value=""/>
+      <characteristic type="System">
+        <parm name="WiFiAction" value="disable"/>
+      </characteristic>
+      <parm name="UseRegulatory" value="0"/>
+      <parm name="UseAdvancedOptions" value="0"/>
+    </characteristic>
+  </characteristic>
+  <characteristic type="Profile">
+    <parm name="ProfileName" value="PowerDisplayUSB"/>
+    <parm name="ModifiedDate" value="2024-09-22 23:03:34"/>
+    <parm name="TargetSystemVersion" value="9.1"/>
+    <characteristic type="DisplayMgr" version="7.2">
+      <parm name="emdk_name" value=""/>
+      <parm name="TimeoutInterval" value="1800"/>
+    </characteristic>
+    <characteristic type="UsbMgr" version="4.2">
+      <parm name="emdk_name" value=""/>
+      <parm name="UsbModuleUsage" value="1"/>
+      <parm name="UsbExternalStorageUsage" value="1"/>
+      <parm name="UsbADBUsage" value="1"/>
+      <parm name="UsbAllAccessDeviceStorageUsage" value="1"/>
+    </characteristic>
+    <characteristic type="PowerMgr" version="9.1">
+      <parm name="emdk_name" value=""/>
+    </characteristic>
+  </characteristic>
+</wap-provisioningdoc>

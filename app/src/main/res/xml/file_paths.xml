@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- APK downloads stored in internal files/scripts/ directory -->
+    <files-path name="scripts" path="scripts/" />
+    <!-- Config file downloads -->
+    <files-path name="config_files" path="config_files/" />
+    <!-- Cache for temporary downloads -->
+    <cache-path name="cache" path="." />
+</paths>

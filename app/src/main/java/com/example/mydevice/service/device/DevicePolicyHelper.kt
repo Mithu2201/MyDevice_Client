@@ -191,6 +191,30 @@ class DevicePolicyHelper(private val context: Context) {
 
     // ── Device Restrictions (Device Owner only) ─────────────────────────────
 
+    /**
+     * Temporarily allow APK installs while kiosk restrictions are active.
+     * Called by ScriptRepository before silent install, restored after.
+     */
+    fun allowInstalls() {
+        if (!isDeviceOwner()) return
+        try {
+            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_INSTALL_APPS)
+            Log.i(TAG, "DISALLOW_INSTALL_APPS cleared for script install")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear install restriction", e)
+        }
+    }
+
+    fun blockInstalls() {
+        if (!isDeviceOwner()) return
+        try {
+            dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_INSTALL_APPS)
+            Log.i(TAG, "DISALLOW_INSTALL_APPS re-applied after script install")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to re-apply install restriction", e)
+        }
+    }
+
     fun applyKioskRestrictions() {
         if (!isDeviceOwner()) return
         try {

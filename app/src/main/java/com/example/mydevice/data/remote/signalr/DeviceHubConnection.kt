@@ -1,8 +1,10 @@
 package com.example.mydevice.data.remote.signalr
 
+import android.os.SystemClock
 import android.util.Log
 import com.example.mydevice.data.local.preferences.SecurePreferences
 import com.example.mydevice.util.Constants
+import com.microsoft.signalr.Action
 import com.microsoft.signalr.HubConnection
 import com.microsoft.signalr.HubConnectionBuilder
 import com.microsoft.signalr.HubConnectionState
@@ -34,6 +36,12 @@ class DeviceHubConnection(
     private var deviceId: String = ""
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Monotonic id so stale [start]/[send] work is ignored after a newer [connect]. */
+    private var connectionSession: Long = 0L
+
+    /** Single in-flight start+send; cancelled on each [connect] to stop overlapping hub.start() races. */
+    private var connectionWork: Job? = null
+
     private val retryDelays = longArrayOf(0, 10_000, 20_000, 30_000, 60_000)
     private var retryIndex = 0
     private var lastReconnectTime = 0L
@@ -45,10 +53,13 @@ class DeviceHubConnection(
 
     // ── Incoming command flows (ViewModels collect these) ───────────────────
 
-    private val _rebootCommand = MutableSharedFlow<Unit>()
+    /** Seconds until reboot (server `/SendRebootCall`); parsed from int/double/object or 0. */
+    private val _rebootCommand = MutableSharedFlow<Double>(extraBufferCapacity = 16)
     val rebootCommand = _rebootCommand.asSharedFlow()
 
-    private val _wifiProfileCommand = MutableSharedFlow<String>()
+    private var lastRebootSignalMs = 0L
+
+    private val _wifiProfileCommand = MutableSharedFlow<WifiProfilePayload>(extraBufferCapacity = 8)
     val wifiProfileCommand = _wifiProfileCommand.asSharedFlow()
 
     private val _messageCommand = MutableSharedFlow<SignalRMessage>()
@@ -65,15 +76,27 @@ class DeviceHubConnection(
 
     // ── Connect ─────────────────────────────────────────────────────────────
 
-    fun connect(deviceId: String) {
-        this.deviceId = deviceId
+    fun connect(registrationId: String) {
+        val trimmed = registrationId.trim()
+        if (trimmed.isEmpty()) {
+            Log.w(TAG, "connect() ignored: empty registration id (admin reboot uses /api/.../deviceId=122 — must match AddDeviceId)")
+            return
+        }
+        // Avoid orphan WebSockets: old connection must stop before a new HubConnection is built.
+        if (hubConnection?.connectionState == HubConnectionState.CONNECTED && deviceId == trimmed) {
+            Log.i(TAG, "SignalR already connected; AddDeviceId already sent as $trimmed — skip reconnect")
+            return
+        }
+        connectionWork?.cancel()
+        disconnect()
+        this.deviceId = trimmed
         if (!scope.isActive) {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         }
         val token = securePreferences.accessToken
         Log.i(
             TAG,
-            "Preparing SignalR connection for registrationId=$deviceId, hasToken=${!token.isNullOrBlank()}"
+            "Preparing SignalR connection for registrationId=$trimmed, hasToken=${!token.isNullOrBlank()}"
         )
 
         val builder = HubConnectionBuilder.create(Constants.SIGNALR_HUB_URL)
@@ -93,21 +116,80 @@ class DeviceHubConnection(
         }
 
         registerListeners()
-        startConnection()
+        val session = connectionSession
+        connectionWork = scope.launch {
+            runConnectionStart(session)
+        }
     }
 
     // ── Register all incoming event listeners ───────────────────────────────
 
+    /**
+     * Legacy mydevicesandroid registers a single `Double` handler; .NET often sends JSON numbers as int.
+     * Use `Object` for one-arg + `Action` for zero-arg (matches hub `SendAsync("Reboot")` / `SendAsync("Reboot", seconds)`).
+     */
+    private fun registerRebootHandlers(hub: HubConnection) {
+        val event = Constants.SignalREvents.REBOOT
+
+        fun parseArg(arg: Any?): Double {
+            if (arg == null) return 0.0
+            return when (arg) {
+                is Number -> arg.toDouble()
+                is String -> arg.trim().toDoubleOrNull() ?: 0.0
+                else -> {
+                    Log.w(TAG, "Reboot: unexpected payload type ${arg.javaClass.name} value=$arg")
+                    0.0
+                }
+            }
+        }
+
+        fun emitDebounced(seconds: Double, source: String) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastRebootSignalMs < 3_000L) {
+                Log.w(TAG, "Reboot: ignored duplicate ($source) within 3s")
+                return
+            }
+            lastRebootSignalMs = now
+            Log.i(TAG, "Reboot: received ($source) delaySeconds=$seconds (filter logcat: $TAG)")
+            scope.launch { _rebootCommand.emit(seconds) }
+        }
+
+        hub.on(
+            event,
+            Action {
+                emitDebounced(0.0, "no-args")
+            }
+        )
+
+        hub.on(
+            event,
+            { arg: Any? ->
+                emitDebounced(parseArg(arg), "one-arg:${arg?.javaClass?.simpleName}")
+            },
+            Object::class.java
+        )
+
+        // Same as legacy: `connection.on("Reboot", this::handleRebootEvent, Double.class)`
+        hub.on(event, { v: Double? ->
+            emitDebounced(v ?: 0.0, "Double")
+        }, Double::class.java)
+    }
+
     private fun registerListeners() {
         val hub = hubConnection ?: return
 
-        hub.on(Constants.SignalREvents.REBOOT, {
-            scope.launch { _rebootCommand.emit(Unit) }
-        }, Void::class.java)
+        registerRebootHandlers(hub)
 
-        hub.on(Constants.SignalREvents.WIFI_PROFILE, { payload ->
-            scope.launch { _wifiProfileCommand.emit(payload) }
-        }, String::class.java)
+        hub.on(
+            Constants.SignalREvents.WIFI_PROFILE,
+            { payload ->
+                scope.launch {
+                    Log.i(TAG, "SignalR WifiProfile received: $payload")
+                    _wifiProfileCommand.emit(payload)
+                }
+            },
+            WifiProfilePayload::class.java
+        )
 
         hub.on(Constants.SignalREvents.SEND_MESSAGE, { payload ->
             scope.launch {
@@ -142,19 +224,72 @@ class DeviceHubConnection(
 
     // ── Start the actual connection ─────────────────────────────────────────
 
-    private fun startConnection() {
-        scope.launch {
-            try {
-                hubConnection?.start()?.blockingAwait()
-                _connectionState.value = HubConnectionState.CONNECTED
-                retryIndex = 0
-                hubConnection?.send(Constants.SignalRMethods.ADD_DEVICE_ID, deviceId)
-                Log.i(TAG, "SignalR connected, AddDeviceId sent with registrationId=$deviceId")
-            } catch (e: Exception) {
-                Log.e(TAG, "SignalR connect failed: ${e.message}")
-                _connectionState.value = HubConnectionState.DISCONNECTED
+    /**
+     * Backend routes `SendRebootCall?deviceId=122` to the SignalR connection that called
+     * `AddDeviceId` with **122**. Prefer sending an [Int] (matches MDM doc / admin API).
+     */
+    private fun sendAddDeviceId(hub: HubConnection) {
+        val raw = deviceId.trim()
+        val asInt = raw.toIntOrNull()
+        if (asInt != null) {
+            hub.send(Constants.SignalRMethods.ADD_DEVICE_ID, asInt)
+            Log.i(
+                TAG,
+                "AddDeviceId sent as INTEGER $asInt — admin reboot API must use the same deviceId"
+            )
+        } else {
+            hub.send(Constants.SignalRMethods.ADD_DEVICE_ID, raw)
+            Log.i(
+                TAG,
+                "AddDeviceId sent as STRING (non-numeric); ensure backend maps this to the same key as SendRebootCall"
+            )
+        }
+    }
+
+    /**
+     * Must not overlap: parallel [hub.start] + [send] causes
+     * "The 'send' method cannot be called if the connection is not active."
+     */
+    private suspend fun runConnectionStart(session: Long) {
+        val hub = hubConnection ?: run {
+            Log.w(TAG, "runConnectionStart: hub is null (cancelled or replaced)")
+            return
+        }
+        try {
+            hub.start().blockingAwait()
+            if (session != connectionSession || hub !== hubConnection) {
+                Log.w(TAG, "runConnectionStart: stale session (replaced by newer connect), skipping AddDeviceId")
+                return
+            }
+            // Rare race: internal state lags behind blockingAwait completion on some devices.
+            if (hub.connectionState != HubConnectionState.CONNECTED) {
+                delay(50)
+            }
+            if (hub.connectionState != HubConnectionState.CONNECTED) {
+                throw IllegalStateException(
+                    "Hub not CONNECTED after start (state=${hub.connectionState}) — cannot send AddDeviceId"
+                )
+            }
+            _connectionState.value = HubConnectionState.CONNECTED
+            retryIndex = 0
+            sendAddDeviceId(hub)
+            Log.i(TAG, "SignalR ready: AddDeviceId completed for session=$session")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "SignalR connect failed: ${e.message}", e)
+            _connectionState.value = HubConnectionState.DISCONNECTED
+            if (session == connectionSession) {
                 reconnectWithBackoff()
             }
+        }
+    }
+
+    private fun startConnection() {
+        val session = connectionSession
+        connectionWork?.cancel()
+        connectionWork = scope.launch {
+            runConnectionStart(session)
         }
     }
 
@@ -168,13 +303,19 @@ class DeviceHubConnection(
         lastReconnectTime = now
 
         if (retryIndex < retryDelays.size) {
-            val delay = retryDelays[retryIndex]
+            val delayMs = retryDelays[retryIndex]
             retryIndex++
-            Log.i(TAG, "Reconnecting in ${delay}ms (attempt $retryIndex/${retryDelays.size})")
-            delay(delay)
+            Log.i(TAG, "Reconnecting in ${delayMs}ms (attempt $retryIndex/${retryDelays.size})")
+            delay(delayMs)
             startConnection()
         } else {
-            Log.w(TAG, "All retries exhausted, waiting for network change to reconnect")
+            Log.w(
+                TAG,
+                "Fast retries exhausted; retrying in ${Constants.SIGNALR_LONG_RETRY_MS}ms (persistent)"
+            )
+            delay(Constants.SIGNALR_LONG_RETRY_MS)
+            retryIndex = 0
+            startConnection()
         }
     }
 
@@ -191,6 +332,9 @@ class DeviceHubConnection(
     // ── Disconnect ──────────────────────────────────────────────────────────
 
     fun disconnect() {
+        connectionWork?.cancel()
+        connectionWork = null
+        connectionSession++
         // Do not cancel the shared scope here. MainActivity refreshes the hub by
         // calling disconnect() followed by connect(), and canceling the scope
         // permanently breaks future reconnect attempts and incoming event emits.
@@ -207,7 +351,8 @@ class DeviceHubConnection(
         hubConnection?.connectionState == HubConnectionState.CONNECTED
 
     companion object {
-        private const val TAG = "DeviceHubConnection"
+        /** Match legacy mydevicesandroid log filter: `adb logcat | findstr SignalR:DeviceHub` */
+        private const val TAG = "SignalR:DeviceHubConnection"
     }
 }
 

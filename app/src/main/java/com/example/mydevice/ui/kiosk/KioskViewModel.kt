@@ -5,33 +5,43 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
+import android.util.Log
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.mydevice.MainActivity
 import com.example.mydevice.data.local.preferences.AppPreferences
 import com.example.mydevice.data.remote.api.NetworkResult
+import com.example.mydevice.data.repository.DeviceRepository
 import com.example.mydevice.data.repository.KioskRepository
 import com.example.mydevice.data.repository.MessageRepository
 import com.example.mydevice.service.device.DevicePolicyHelper
+import com.example.mydevice.service.worker.ScriptSyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class KioskApp(
+    val id: Int = 0,
     val packageName: String,
     val appName: String,
-    val iconUrl: String? = null
+    val iconUrl: String? = null,
+    val label: String? = null,
+    val autoLaunch: Boolean = false
 )
 
 data class KioskUiState(
     val apps: List<KioskApp> = emptyList(),
     val isLoading: Boolean = true,
+    val isSyncing: Boolean = false,
     val unreadMessageCount: Int = 0,
     val error: String? = null,
     val companyName: String = "",
     val isDeviceOwner: Boolean = false,
-    val kioskActive: Boolean = false
+    val kioskActive: Boolean = false,
+    val installedPackageNames: Set<String> = emptySet(),
+    val installSnapshotVersion: Int = 0
 )
 
 class KioskViewModel(
@@ -39,6 +49,7 @@ class KioskViewModel(
     private val messageRepo: MessageRepository,
     private val appPrefs: AppPreferences,
     private val dpmHelper: DevicePolicyHelper,
+    private val deviceRepo: DeviceRepository,
     private val appContext: Context
 ) : ViewModel() {
 
@@ -52,24 +63,64 @@ class KioskViewModel(
         observeCompanyName()
     }
 
+    fun startKioskBackgroundTasks() {
+        // Reserved for periodic install-state polling; grid uses installSnapshotVersion after refresh.
+    }
+
+    fun stopKioskBackgroundTasks() {}
+
+    fun performFullSync(mainActivity: MainActivity?) {
+        viewModelScope.launch {
+            if (_uiState.value.isSyncing) return@launch
+            _uiState.update { it.copy(isSyncing = true) }
+            try {
+                withContext(Dispatchers.IO) {
+                    ScriptSyncWorker.enqueueOnce(appContext)
+                    val deviceId = appPrefs.deviceId.first()
+                    if (deviceId.isNotBlank()) {
+                        messageRepo.syncMessages(deviceId)
+                    }
+                    deviceRepo.updateDeviceDetails()
+                }
+                mainActivity?.onKioskToolbarSync()
+                withContext(Dispatchers.IO) {
+                    loadKioskAppsBody()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "performFullSync failed", e)
+            } finally {
+                _uiState.update { it.copy(isSyncing = false) }
+            }
+        }
+    }
+
     private fun loadKioskApps() {
         viewModelScope.launch(Dispatchers.IO) {
+            loadKioskAppsBody()
+        }
+    }
+
+    private suspend fun loadKioskAppsBody() {
             withContext(Dispatchers.Main) {
                 _uiState.value = _uiState.value.copy(isLoading = true)
             }
             when (val result = kioskRepo.refreshKioskApps()) {
                 is NetworkResult.Success -> {
-                    val serverApps = result.data.filter { it.isActive }.map { dto ->
+                    val serverApps = result.data.filter { it.visible }.map { dto ->
                         KioskApp(
+                            id = dto.id,
                             packageName = dto.packageName,
-                            appName = dto.appName ?: dto.packageName,
-                            iconUrl = dto.iconUrl
+                            appName = dto.label ?: dto.title ?: dto.packageName,
+                            iconUrl = dto.icon,
+                            label = dto.label,
+                            autoLaunch = dto.autoLaunch
                         )
                     }
                     val testApps = getTestApps(appContext)
                     val apps = serverApps.ifEmpty { testApps }
                     withContext(Dispatchers.Main) {
                         _uiState.value = _uiState.value.copy(apps = apps, isLoading = false)
+                        refreshInstallSnapshot(apps)
                     }
                     enforceKiosk(apps.map { it.packageName })
                 }
@@ -81,6 +132,7 @@ class KioskViewModel(
                             isLoading = false,
                             error = null
                         )
+                        refreshInstallSnapshot(testApps)
                     }
                     enforceKiosk(testApps.map { it.packageName })
                 }
@@ -91,10 +143,23 @@ class KioskViewModel(
                             apps = testApps,
                             isLoading = false
                         )
+                        refreshInstallSnapshot(testApps)
                     }
                     enforceKiosk(testApps.map { it.packageName })
                 }
             }
+    }
+
+    private fun refreshInstallSnapshot(apps: List<KioskApp>) {
+        val installed = apps
+            .filter { isAppInstalled(appContext, it.packageName) }
+            .map { it.packageName }
+            .toSet()
+        _uiState.update {
+            it.copy(
+                installedPackageNames = installed,
+                installSnapshotVersion = it.installSnapshotVersion + 1
+            )
         }
     }
 
@@ -175,6 +240,8 @@ class KioskViewModel(
     fun refresh() = loadKioskApps()
 
     companion object {
+        private const val TAG = "KioskViewModel"
+
         private val CALCULATOR_PACKAGES = listOf(
             "com.vivo.calculator",
             "com.android.bbkcalculator",

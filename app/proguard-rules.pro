@@ -38,8 +38,13 @@
 -keep class com.microsoft.signalr.** { *; }
 -dontwarn com.microsoft.signalr.**
 
+# ── Zebra EMDK ───────────────────────────────────────────────────────────────
+-keep class com.symbol.emdk.** { *; }
+-dontwarn com.symbol.emdk.**
+
 # ── App DTOs and entities (prevent stripping fields used by serialization) ───
 -keep class com.example.mydevice.data.remote.dto.** { *; }
+-keep class com.example.mydevice.data.remote.signalr.WifiProfilePayload { *; }
 -keep class com.example.mydevice.data.local.database.entity.** { *; }
 
 # ── Google Tink / ErrorProne (used by EncryptedSharedPreferences) ─────────────
