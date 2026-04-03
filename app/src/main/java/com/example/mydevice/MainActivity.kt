@@ -168,7 +168,7 @@ class MainActivity : ComponentActivity() {
         scope.launch {
             try { triggerMessageSync("resume") } catch (_: Exception) {}
             try {
-                if (hubConnection?.isConnected() != true) {
+                if (hubConnection?.hasActiveHubSession() != true) {
                     refreshSignalRConnection()
                 }
             } catch (_: Exception) {}
@@ -273,8 +273,9 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val registrationId = resolveSignalRRegistrationId()
-                    if (registrationId.isNotBlank() && hubConnection?.isConnected() != true) {
-                        hubConnection?.connect(registrationId)
+                    val hub = hubConnection
+                    if (registrationId.isNotBlank() && hub != null && !hub.hasActiveHubSession()) {
+                        hub.connect(registrationId)
                     }
                 }
             } catch (e: Exception) {
