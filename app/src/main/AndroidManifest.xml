@@ -31,6 +31,8 @@
 
     <!-- Notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Needed for package install flows -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Overlay (for floating alerts if needed) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />

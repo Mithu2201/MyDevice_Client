@@ -40,8 +40,8 @@ import org.koin.androidx.compose.koinViewModel
  * VISUAL FLOW:
  * 1. Shows app icon + "MyDevice" branding with loading spinner
  * 2. If already registered → auto-navigates to kiosk dashboard
- * 3. If not registered → slides in a company code input card
- * 4. User enters code → shows registering state → navigates on success
+ * 3. If not registered → slides in a company ID input card
+ * 4. User enters numeric company ID → registers → navigates on success
  *
  * APP ICON: Replace Icons.Default.DevicesOther with:
  *   Image(painter = painterResource(R.mipmap.ic_launcher), ...)
@@ -62,6 +62,12 @@ fun SplashScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var companyId by remember { mutableStateOf("") }
+
+    LaunchedEffect(uiState.showCompanyIdInput, uiState.companyIdPrefill) {
+        if (uiState.showCompanyIdInput && uiState.companyIdPrefill.isNotEmpty()) {
+            companyId = uiState.companyIdPrefill
+        }
+    }
 
     // Navigation logic — unchanged
     LaunchedEffect(uiState.navigateToMain) {
@@ -172,7 +178,7 @@ fun SplashScreen(
 
             // ── Registration card ────────────────────────────────────────────
             AnimatedVisibility(
-                visible = uiState.showCompanyCodeInput,
+                visible = uiState.showCompanyIdInput,
                 enter = fadeIn() + slideInVertically { it / 2 }
             ) {
                 Card(

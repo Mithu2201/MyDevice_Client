@@ -101,6 +101,29 @@ fun SettingsScreen(
                     label = "Inactivity Timeout",
                     value = "${uiState.inactivityMinutes} min"
                 )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Allow remote reboot (SignalR)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            "Off by default. When on, admin \"Reboot\" hub commands restart the device (device owner only).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                        )
+                    }
+                    Switch(
+                        checked = uiState.allowRemoteRebootFromHub,
+                        onCheckedChange = viewModel::setAllowRemoteRebootFromHub
+                    )
+                }
             }
 
             // ── Sync Status ─────────────────────────────────────────────
