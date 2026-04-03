@@ -10,6 +10,8 @@ import com.microsoft.signalr.HubConnectionBuilder
 import com.microsoft.signalr.HubConnectionState
 import com.microsoft.signalr.TransportEnum
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -41,6 +43,12 @@ class DeviceHubConnection(
 
     /** Single in-flight start+send; cancelled on each [connect] to stop overlapping hub.start() races. */
     private var connectionWork: Job? = null
+
+    /** Only one [runConnectionStart] at a time (avoids duplicate AddDeviceId / SignalR ready for same session). */
+    private val connectionStartMutex = Mutex()
+
+    /** Replaces overlapping [onClosed] → [reconnectWithBackoff] chains. */
+    private var reconnectJob: Job? = null
 
     private val retryDelays = longArrayOf(0, 10_000, 20_000, 30_000, 60_000)
     private var retryIndex = 0
@@ -82,10 +90,20 @@ class DeviceHubConnection(
             Log.w(TAG, "connect() ignored: empty registration id (admin reboot uses /api/.../deviceId=122 — must match AddDeviceId)")
             return
         }
-        // Avoid orphan WebSockets: old connection must stop before a new HubConnection is built.
-        if (hubConnection?.connectionState == HubConnectionState.CONNECTED && deviceId == trimmed) {
-            Log.i(TAG, "SignalR already connected; AddDeviceId already sent as $trimmed — skip reconnect")
-            return
+        // Avoid tearing down a hub that is still connecting / connected for the same registration id.
+        val existing = hubConnection
+        if (existing != null && deviceId == trimmed) {
+            when (existing.connectionState) {
+                HubConnectionState.CONNECTED,
+                HubConnectionState.CONNECTING -> {
+                    Log.i(
+                        TAG,
+                        "SignalR already active for registrationId=$trimmed (state=${existing.connectionState}) — skip duplicate connect()"
+                    )
+                    return
+                }
+                else -> { }
+            }
         }
         connectionWork?.cancel()
         disconnect()
@@ -218,7 +236,10 @@ class DeviceHubConnection(
         hub.onClosed { error ->
             _connectionState.value = HubConnectionState.DISCONNECTED
             Log.w(TAG, "SignalR disconnected: ${error?.message}")
-            scope.launch { reconnectWithBackoff() }
+            reconnectJob?.cancel()
+            reconnectJob = scope.launch {
+                reconnectWithBackoff()
+            }
         }
     }
 
@@ -251,36 +272,48 @@ class DeviceHubConnection(
      * "The 'send' method cannot be called if the connection is not active."
      */
     private suspend fun runConnectionStart(session: Long) {
-        val hub = hubConnection ?: run {
-            Log.w(TAG, "runConnectionStart: hub is null (cancelled or replaced)")
-            return
-        }
-        try {
-            hub.start().blockingAwait()
-            if (session != connectionSession || hub !== hubConnection) {
-                Log.w(TAG, "runConnectionStart: stale session (replaced by newer connect), skipping AddDeviceId")
+        connectionStartMutex.withLock {
+            if (session != connectionSession) {
+                Log.w(TAG, "runConnectionStart: stale session after lock (replaced), skipping")
                 return
             }
-            // Rare race: internal state lags behind blockingAwait completion on some devices.
-            if (hub.connectionState != HubConnectionState.CONNECTED) {
-                delay(50)
+            val hub = hubConnection ?: run {
+                Log.w(TAG, "runConnectionStart: hub is null (cancelled or replaced)")
+                return
             }
-            if (hub.connectionState != HubConnectionState.CONNECTED) {
-                throw IllegalStateException(
-                    "Hub not CONNECTED after start (state=${hub.connectionState}) — cannot send AddDeviceId"
-                )
+            if (hub.connectionState == HubConnectionState.CONNECTED) {
+                Log.i(TAG, "runConnectionStart: already CONNECTED — skip duplicate start (session=$session)")
+                return
             }
-            _connectionState.value = HubConnectionState.CONNECTED
-            retryIndex = 0
-            sendAddDeviceId(hub)
-            Log.i(TAG, "SignalR ready: AddDeviceId completed for session=$session")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "SignalR connect failed: ${e.message}", e)
-            _connectionState.value = HubConnectionState.DISCONNECTED
-            if (session == connectionSession) {
-                reconnectWithBackoff()
+            try {
+                hub.start().blockingAwait()
+                if (session != connectionSession || hub !== hubConnection) {
+                    Log.w(TAG, "runConnectionStart: stale session (replaced by newer connect), skipping AddDeviceId")
+                    return
+                }
+                // Rare race: internal state lags behind blockingAwait completion on some devices.
+                if (hub.connectionState != HubConnectionState.CONNECTED) {
+                    delay(50)
+                }
+                if (hub.connectionState != HubConnectionState.CONNECTED) {
+                    throw IllegalStateException(
+                        "Hub not CONNECTED after start (state=${hub.connectionState}) — cannot send AddDeviceId"
+                    )
+                }
+                _connectionState.value = HubConnectionState.CONNECTED
+                retryIndex = 0
+                sendAddDeviceId(hub)
+                Log.i(TAG, "SignalR ready: AddDeviceId completed for session=$session")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "SignalR connect failed: ${e.message}", e)
+                _connectionState.value = HubConnectionState.DISCONNECTED
+                if (session == connectionSession) {
+                    reconnectWithBackoff()
+                } else {
+                    Unit
+                }
             }
         }
     }
@@ -332,6 +365,8 @@ class DeviceHubConnection(
     // ── Disconnect ──────────────────────────────────────────────────────────
 
     fun disconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
         connectionWork?.cancel()
         connectionWork = null
         connectionSession++
@@ -349,6 +384,15 @@ class DeviceHubConnection(
 
     fun isConnected(): Boolean =
         hubConnection?.connectionState == HubConnectionState.CONNECTED
+
+    /**
+     * True while the underlying hub is not [HubConnectionState.DISCONNECTED] (CONNECTING / CONNECTED / etc.).
+     * Use this to avoid calling [connect] again while a connection attempt is already in flight.
+     */
+    fun hasActiveHubSession(): Boolean {
+        val h = hubConnection ?: return false
+        return h.connectionState != HubConnectionState.DISCONNECTED
+    }
 
     companion object {
         /** Match legacy mydevicesandroid log filter: `adb logcat | findstr SignalR:DeviceHub` */
