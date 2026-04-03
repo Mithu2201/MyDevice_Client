@@ -25,8 +25,11 @@ object Constants {
     const val HTTP_READ_TIMEOUT_MS = 30_000L
     const val HTTP_WRITE_TIMEOUT_MS = 30_000L
 
-    const val SIGNALR_SERVER_TIMEOUT_SECONDS = 30L
-    const val SIGNALR_KEEP_ALIVE_SECONDS = 20L
+    const val SIGNALR_SERVER_TIMEOUT_SECONDS = 60L
+    const val SIGNALR_KEEP_ALIVE_SECONDS = 15L
+
+    /** After fast backoff retries fail, wait this long before trying again (infinite loop). */
+    const val SIGNALR_LONG_RETRY_MS = 60_000L
 
     object EventTypes {
         const val LOGIN = "Login"

@@ -16,6 +16,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Zebra EMDK (com.symbol:emdk) — same as mydevicesandroid
+        maven(url = "https://zebratech.jfrog.io/artifactory/EMDK-Android/")
     }
 }
 

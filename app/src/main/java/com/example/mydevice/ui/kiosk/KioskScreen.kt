@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.mydevice.MainActivity
 import coil.compose.AsyncImage
 import coil.decode.BitmapFactoryDecoder
 import coil.request.CachePolicy
@@ -109,6 +110,24 @@ fun KioskScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            viewModel.performFullSync(activity as? MainActivity)
+                        },
+                        enabled = !uiState.isSyncing
+                    ) {
+                        if (uiState.isSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Sync,
+                                contentDescription = "Sync"
+                            )
+                        }
+                    }
                     BadgedBox(
                         badge = {
                             if (uiState.unreadMessageCount > 0) {
@@ -194,30 +213,17 @@ fun KioskScreen(
             }
 
             if (uiState.error != null) {
-                val err = uiState.error!!
-                val needsCompanyRegistration =
-                    err.contains("Company not registered", ignoreCase = true) ||
-                        err.contains("invalid company", ignoreCase = true)
                 Snackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp),
                     action = {
-                        Row {
-                            if (needsCompanyRegistration) {
-                                TextButton(
-                                    onClick = { viewModel.navigateToCompanyRegistration(onLogout) }
-                                ) {
-                                    Text("Enter company ID")
-                                }
-                            }
-                            TextButton(onClick = { viewModel.refresh() }) {
-                                Text("Retry")
-                            }
+                        TextButton(onClick = { viewModel.refresh() }) {
+                            Text("Retry")
                         }
                     }
                 ) {
-                    Text(err)
+                    Text(uiState.error!!)
                 }
             }
         }

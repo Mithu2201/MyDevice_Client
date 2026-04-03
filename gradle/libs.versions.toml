@@ -25,6 +25,7 @@ accompanist = "0.34.0"
 coil = "2.7.0"
 splashscreen = "1.0.1"
 kotlinxDatetime = "0.6.0"
+emdk = "9.1.1"
 
 [libraries]
 # AndroidX Core
@@ -70,6 +71,9 @@ work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version
 
 # SignalR (Real-time)
 signalr = { group = "com.microsoft.signalr", name = "signalr", version.ref = "signalr" }
+
+# Zebra EMDK (PowerMgr reboot, profiles — same as mydevicesandroid reference)
+emdk = { group = "com.symbol", name = "emdk", version.ref = "emdk" }
 
 # DataStore + Security (Secure Preferences)
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }

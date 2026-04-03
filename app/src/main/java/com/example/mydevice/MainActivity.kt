@@ -42,6 +42,8 @@ import com.example.mydevice.data.remote.signalr.DeviceHubConnection
 import com.example.mydevice.data.repository.DeviceRepository
 import com.example.mydevice.data.repository.MessageRepository
 import com.example.mydevice.service.device.DevicePolicyHelper
+import com.example.mydevice.service.device.EmdkRebootHelper
+import com.example.mydevice.service.device.EmdkWifiProfileHelper
 import com.example.mydevice.service.worker.ConfigFileDownloadWorker
 import com.example.mydevice.service.worker.ScriptSyncWorker
 import com.example.mydevice.ui.navigation.AppNavigation
@@ -87,9 +89,9 @@ class MainActivity : ComponentActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var signalRCollectorsStarted = false
 
-    /** Last time we executed a SignalR-requested reboot (cooldown against duplicate events). */
     @Volatile
     private var lastRemoteRebootAtMs: Long = 0L
+
     private val deviceAdminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -165,7 +167,24 @@ class MainActivity : ComponentActivity() {
         enableImmersiveMode()
         scope.launch {
             try { triggerMessageSync("resume") } catch (_: Exception) {}
+            try {
+                if (hubConnection?.isConnected() != true) {
+                    refreshSignalRConnection()
+                }
+            } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * Kiosk toolbar sync: reconnect SignalR (fresh token / AddDeviceId) and pull config files.
+     * Kiosk app list + scripts + messages are refreshed from [KioskViewModel.performFullSync].
+     */
+    fun onKioskToolbarSync() {
+        Log.i(TAG, "onKioskToolbarSync")
+        scope.launch {
+            try { ConfigFileDownloadWorker.enqueueOnce(this@MainActivity) } catch (_: Exception) {}
+        }
+        refreshSignalRConnection()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -275,7 +294,8 @@ class MainActivity : ComponentActivity() {
         val registrationId = if (serverDeviceId > 0) serverDeviceId.toString() else localDeviceId
         Log.i(
             TAG,
-            "SignalR registration ID resolved. serverDeviceId=$serverDeviceId, localDeviceId=$localDeviceId, using=$registrationId"
+            "SignalR registration ID resolved. serverDeviceId=$serverDeviceId, localDeviceId=$localDeviceId, using=$registrationId " +
+                "(must match admin /api/Message/SendRebootCall?deviceId= — if not, remote reboot will never reach this device)"
         )
         return registrationId
     }
@@ -362,47 +382,119 @@ class MainActivity : ComponentActivity() {
         scope.launch {
             try {
                 val conn = hubConnection ?: return@launch
-                conn.rebootCommand.collect {
-                    try {
-                        val prefs = appPrefs ?: run {
-                            Log.w(TAG, "SignalR Reboot ignored: AppPreferences unavailable")
-                            return@collect
+                conn.rebootCommand.collect { delaySeconds ->
+                    scope.launch {
+                        try {
+                            val prefs = appPrefs ?: run {
+                                Log.w(TAG, "SignalR Reboot ignored: AppPreferences unavailable")
+                                return@launch
+                            }
+                            val allowed = try {
+                                prefs.allowRemoteRebootFromHub.first()
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (!allowed) {
+                                Log.w(
+                                    TAG,
+                                    "SignalR Reboot event ignored — remote reboot disabled (Settings → Allow remote reboot)."
+                                )
+                                return@launch
+                            }
+                            val now = System.currentTimeMillis()
+                            val cooldownMs = 30L * 60L * 1000L
+                            if (now - lastRemoteRebootAtMs < cooldownMs) {
+                                Log.w(
+                                    TAG,
+                                    "SignalR Reboot ignored — ${cooldownMs / 60000} min cooldown since last reboot command"
+                                )
+                                return@launch
+                            }
+                            lastRemoteRebootAtMs = now
+
+                            val delayMs = (delaySeconds * 1000.0).toLong().coerceIn(0, 24 * 60 * 60 * 1000L)
+                            if (delayMs > 0) {
+                                Log.i(TAG, "Reboot: waiting ${delayMs}ms (server delay)")
+                                delay(delayMs)
+                            }
+                            // Device owner: DPM reboot is reliable on managed devices (skip EMDK indirection).
+                            if (dpmHelper.isDeviceOwner()) {
+                                Log.i(TAG, "Reboot: executing DevicePolicyManager.reboot()")
+                                dpmHelper.rebootDevice()
+                            } else {
+                                EmdkRebootHelper.requestReboot(this@MainActivity, 0.0) { emdkOk ->
+                                    if (!emdkOk) {
+                                        Log.w(
+                                            TAG,
+                                            "Reboot: EMDK could not reboot; app is not device owner — no DPM fallback"
+                                        )
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error handling reboot command", e)
                         }
-                        val allowed = try {
-                            prefs.allowRemoteRebootFromHub.first()
-                        } catch (_: Exception) {
-                            false
-                        }
-                        if (!allowed) {
-                            Log.w(
-                                TAG,
-                                "SignalR Reboot event ignored — remote reboot disabled (Settings → Allow remote reboot). " +
-                                    "Server should not rely on implicit reboot; enable only if admins intentionally send Reboot."
-                            )
-                            return@collect
-                        }
-                        val now = System.currentTimeMillis()
-                        val cooldownMs = 30L * 60L * 1000L
-                        if (now - lastRemoteRebootAtMs < cooldownMs) {
-                            Log.w(
-                                TAG,
-                                "SignalR Reboot ignored — ${cooldownMs / 60000} min cooldown since last reboot command"
-                            )
-                            return@collect
-                        }
-                        lastRemoteRebootAtMs = now
-                        if (dpmHelper.isDeviceOwner()) {
-                            Log.i(TAG, "Executing DevicePolicyManager.reboot() after SignalR Reboot (allowed + cooldown OK)")
-                            dpmHelper.rebootDevice()
-                        } else {
-                            Log.w(TAG, "SignalR Reboot received but device is not device owner — cannot reboot")
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error handling reboot command", e)
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error collecting reboot commands", e)
+            }
+        }
+        scope.launch {
+            try {
+                val conn = hubConnection ?: return@launch
+                conn.wifiProfileCommand.collect { profile ->
+                    try {
+                        if (profile.active == false) {
+                            Log.i(TAG, "WifiProfile skipped (active=false): $profile")
+                            return@collect
+                        }
+                        val essid = profile.resolvedEssid()
+                        if (essid.isEmpty()) {
+                            Log.w(TAG, "WifiProfile missing essid: $profile")
+                            return@collect
+                        }
+                        Log.i(
+                            TAG,
+                            "WifiProfile from admin: essid=$essid encryption=${profile.encryption}"
+                        )
+                        EmdkWifiProfileHelper.applyAddSsid(
+                            this@MainActivity,
+                            essid,
+                            profile.password.orEmpty()
+                        ) { ok ->
+                            Log.i(TAG, "WifiProfile EMDK apply finished: success=$ok")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "WifiProfile handling failed", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error collecting WifiProfile commands", e)
+            }
+        }
+        scope.launch {
+            try {
+                val conn = hubConnection ?: return@launch
+                conn.xmlCommand.collect { xml ->
+                    Log.i(TAG, "SignalR XML command (${xml.length} chars), triggering data sync")
+                    scope.launch {
+                        try {
+                            triggerMessageSync("signalr_xml")
+                            ScriptSyncWorker.enqueueOnce(this@MainActivity)
+                            ConfigFileDownloadWorker.enqueueOnce(this@MainActivity)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "SignalR XML follow-up failed", e)
+                        }
+                    }
+                    try {
+                        refreshSignalRConnection()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "SignalR refresh after XML failed", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error collecting SignalR XML commands", e)
             }
         }
     }
