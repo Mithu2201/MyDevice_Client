@@ -108,6 +108,28 @@ class MyDevicesApi(private val client: HttpClient) {
         return optString(key, null)
     }
 
+    /** First matching key (camelCase or PascalCase from ASP.NET serializers). */
+    private fun JSONObject.optNullableStringEither(vararg keys: String): String? {
+        for (key in keys) {
+            if (has(key) && !isNull(key)) return optString(key, null)
+        }
+        return null
+    }
+
+    private fun JSONObject.optBooleanEither(vararg keys: String, ifAbsent: Boolean): Boolean {
+        for (key in keys) {
+            if (has(key) && !isNull(key)) return getBoolean(key)
+        }
+        return ifAbsent
+    }
+
+    private fun JSONObject.optIntEither(default: Int, vararg keys: String): Int {
+        for (key in keys) {
+            if (has(key) && !isNull(key)) return optInt(key, default)
+        }
+        return default
+    }
+
     /** GET api/DeviceConfiguration?deviceid= — fetch remote configuration flags */
     suspend fun getDeviceConfiguration(deviceId: String): DeviceConfigurationResponse =
         client.get("api/DeviceConfiguration") {
@@ -183,6 +205,7 @@ class MyDevicesApi(private val client: HttpClient) {
                 when {
                     root.has("data") && root.opt("data") is JSONArray -> root.getJSONArray("data")
                     root.has("data") && root.opt("data") is JSONObject -> JSONArray().put(root.getJSONObject("data"))
+                    root.has("result") && root.opt("result") is JSONArray -> root.getJSONArray("result")
                     else -> JSONArray().put(root)
                 }
             }
@@ -193,19 +216,24 @@ class MyDevicesApi(private val client: HttpClient) {
             try {
                 val obj = jsonArray.getJSONObject(i)
                 KioskAppDto(
-                    id = obj.optInt("id", 0),
-                    title = obj.optNullableString("title"),
-                    icon = obj.optNullableString("icon"),
-                    type = obj.optNullableString("type"),
-                    autoLaunch = obj.optBoolean("autoLaunch", false),
-                    vpnConnect = obj.optBoolean("vpnConnect", false),
-                    visible = obj.optBoolean("visible", false),
-                    label = obj.optNullableString("label"),
-                    activity = obj.optNullableString("activity"),
-                    folderId = if (obj.isNull("folderId")) null else obj.optInt("folderId"),
-                    folderOrder = obj.optInt("folderOrder", 0),
-                    packageName = obj.optString("packageName", ""),
-                    companyId = obj.optInt("companyId", 0)
+                    id = obj.optIntEither(0, "id", "Id"),
+                    title = obj.optNullableStringEither("title", "Title"),
+                    icon = obj.optNullableStringEither("icon", "Icon"),
+                    type = obj.optNullableStringEither("type", "Type"),
+                    autoLaunch = obj.optBooleanEither("autoLaunch", "AutoLaunch", ifAbsent = false),
+                    vpnConnect = obj.optBooleanEither("vpnConnect", "VpnConnect", ifAbsent = false),
+                    // Approved apps often omit this; default true so they are not dropped by [KioskViewModel] filter.
+                    visible = obj.optBooleanEither("visible", "Visible", ifAbsent = true),
+                    label = obj.optNullableStringEither("label", "Label"),
+                    activity = obj.optNullableStringEither("activity", "Activity"),
+                    folderId = when {
+                        obj.has("folderId") && !obj.isNull("folderId") -> obj.optInt("folderId", 0)
+                        obj.has("FolderId") && !obj.isNull("FolderId") -> obj.optInt("FolderId", 0)
+                        else -> null
+                    },
+                    folderOrder = obj.optIntEither(0, "folderOrder", "FolderOrder"),
+                    packageName = obj.optNullableStringEither("packageName", "PackageName").orEmpty(),
+                    companyId = obj.optIntEither(0, "companyId", "CompanyId")
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse kiosk app at index $i", e)
