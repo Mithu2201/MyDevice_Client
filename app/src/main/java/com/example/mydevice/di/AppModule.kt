@@ -5,6 +5,7 @@ import com.example.mydevice.data.local.preferences.SecurePreferences
 import com.example.mydevice.data.remote.signalr.DeviceHubConnection
 import com.example.mydevice.data.repository.*
 import com.example.mydevice.service.device.DevicePolicyHelper
+import com.example.mydevice.service.script.RemoteScriptExecutor
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -19,6 +20,7 @@ val appModule = module {
 
     // ── SignalR ─────────────────────────────────────────────────────────────
     single { DeviceHubConnection(get()) }
+    single { RemoteScriptExecutor(androidContext(), get(), get(), get()) }
 
     // ── Repositories ────────────────────────────────────────────────────────
     single { AuthRepository(get(), get(), get(), get()) }

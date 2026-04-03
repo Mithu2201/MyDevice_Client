@@ -41,6 +41,7 @@ import com.example.mydevice.data.remote.signalr.DeviceHubConnection
 import com.example.mydevice.data.repository.DeviceRepository
 import com.example.mydevice.data.repository.MessageRepository
 import com.example.mydevice.service.device.DevicePolicyHelper
+import com.example.mydevice.service.script.RemoteScriptExecutor
 import com.example.mydevice.service.worker.ConfigFileDownloadWorker
 import com.example.mydevice.ui.navigation.AppNavigation
 import com.example.mydevice.ui.theme.Blue700
@@ -80,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private var deviceRepo: DeviceRepository? = null
     private var messageRepo: MessageRepository? = null
     private var appPrefs: AppPreferences? = null
+    private var remoteScriptExecutor: RemoteScriptExecutor? = null
     lateinit var dpmHelper: DevicePolicyHelper
         private set
 
@@ -223,6 +225,7 @@ class MainActivity : ComponentActivity() {
             deviceRepo = try { koin.get(DeviceRepository::class) } catch (_: Exception) { null }
             messageRepo = try { koin.get(MessageRepository::class) } catch (_: Exception) { null }
             appPrefs = try { koin.get(AppPreferences::class) } catch (_: Exception) { null }
+            remoteScriptExecutor = try { koin.get(RemoteScriptExecutor::class) } catch (_: Exception) { null }
         } catch (e: Exception) {
             Log.w(TAG, "Error resolving Koin dependencies", e)
         }
@@ -366,6 +369,21 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error collecting reboot commands", e)
+            }
+        }
+        scope.launch {
+            try {
+                val conn = hubConnection ?: return@launch
+                val executor = remoteScriptExecutor ?: return@launch
+                conn.xmlCommand.collect { payload ->
+                    try {
+                        executor.executeScript(payload)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error executing remote script payload", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error collecting XML/script commands", e)
             }
         }
     }
