@@ -88,6 +88,10 @@ class MainActivity : ComponentActivity() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var signalRCollectorsStarted = false
+
+    @Volatile
+    private var lastRemoteRebootAtMs: Long = 0L
+
     private val deviceAdminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -262,6 +266,12 @@ class MainActivity : ComponentActivity() {
                     ensureMessageObserver()
                     ensurePeriodicMessageSync()
 
+                    try {
+                        deviceRepo?.ensureServerDeviceIdFromLookup()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "ensureServerDeviceIdFromLookup failed", e)
+                    }
+
                     val registrationId = resolveSignalRRegistrationId()
                     if (registrationId.isNotBlank() && hubConnection?.isConnected() != true) {
                         hubConnection?.connect(registrationId)
@@ -381,6 +391,33 @@ class MainActivity : ComponentActivity() {
                 conn.rebootCommand.collect { delaySeconds ->
                     scope.launch {
                         try {
+                            val prefs = appPrefs ?: run {
+                                Log.w(TAG, "SignalR Reboot ignored: AppPreferences unavailable")
+                                return@launch
+                            }
+                            val allowed = try {
+                                prefs.allowRemoteRebootFromHub.first()
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (!allowed) {
+                                Log.w(
+                                    TAG,
+                                    "SignalR Reboot event ignored — remote reboot disabled (Settings → Allow remote reboot)."
+                                )
+                                return@launch
+                            }
+                            val now = System.currentTimeMillis()
+                            val cooldownMs = 30L * 60L * 1000L
+                            if (now - lastRemoteRebootAtMs < cooldownMs) {
+                                Log.w(
+                                    TAG,
+                                    "SignalR Reboot ignored — ${cooldownMs / 60000} min cooldown since last reboot command"
+                                )
+                                return@launch
+                            }
+                            lastRemoteRebootAtMs = now
+
                             val delayMs = (delaySeconds * 1000.0).toLong().coerceIn(0, 24 * 60 * 60 * 1000L)
                             if (delayMs > 0) {
                                 Log.i(TAG, "Reboot: waiting ${delayMs}ms (server delay)")

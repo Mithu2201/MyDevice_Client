@@ -60,6 +60,15 @@ class AppPreferences(private val context: Context) {
         context.dataStore.edit { it[KEY_SERVER_DEVICE_ID] = id }
     }
 
+    /** When false, SignalR remote reboot commands are ignored (see MainActivity). */
+    val allowRemoteRebootFromHub: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_ALLOW_REMOTE_REBOOT] ?: true
+    }
+
+    suspend fun setAllowRemoteRebootFromHub(allow: Boolean) {
+        context.dataStore.edit { it[KEY_ALLOW_REMOTE_REBOOT] = allow }
+    }
+
     // ── Remote Configuration Flags ──────────────────────────────────────────
 
     val showCheckInView: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -109,6 +118,7 @@ class AppPreferences(private val context: Context) {
         private val KEY_COMPANY_NAME = stringPreferencesKey("company_name")
         private val KEY_DEVICE_ID = stringPreferencesKey("device_id")
         private val KEY_SERVER_DEVICE_ID = intPreferencesKey("server_device_id")
+        private val KEY_ALLOW_REMOTE_REBOOT = booleanPreferencesKey("allow_remote_reboot_from_hub")
         private val KEY_SHOW_CHECK_IN = booleanPreferencesKey("show_check_in")
         private val KEY_SHOW_CHARGING = booleanPreferencesKey("show_charging")
         private val KEY_INACTIVITY_TIMEOUT = intPreferencesKey("inactivity_timeout")

@@ -69,6 +69,16 @@ class MyDevicesApi(private val client: HttpClient) {
         return parseDeviceResponse(raw)
     }
 
+    /**
+     * GET api/Device/GetByMAC?macAddress= — resolves numeric device id (same as SendRebootCall / admin).
+     */
+    suspend fun getDeviceByMac(macAddress: String): DeviceResponse {
+        val raw = client.get("api/Device/GetByMAC") {
+            parameter("macAddress", macAddress)
+        }.bodyAsText()
+        return parseDeviceResponse(raw)
+    }
+
     private fun parseDeviceResponse(raw: String): DeviceResponse {
         try {
             return json.decodeFromString(DeviceResponse.serializer(), raw)

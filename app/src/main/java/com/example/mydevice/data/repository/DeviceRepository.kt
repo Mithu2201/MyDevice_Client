@@ -84,9 +84,54 @@ class DeviceRepository(
         )
         val result = safeApiCall { api.updateDevice(request) }
         if (result is NetworkResult.Success) {
-            appPrefs.setServerDeviceId(result.data.id)
+            var id = result.data.id
+            if (id <= 0) {
+                Log.w(TAG, "Telemetry POST returned id=0; resolving numeric id via GetByMAC")
+                when (val lookup = safeApiCall { api.getDeviceByMac(stableDeviceId) }) {
+                    is NetworkResult.Success -> {
+                        if (lookup.data.id > 0) {
+                            id = lookup.data.id
+                            Log.i(TAG, "Resolved server device id from GetByMAC: $id")
+                        }
+                    }
+                    else -> { }
+                }
+            }
+            if (id > 0) {
+                appPrefs.setServerDeviceId(id)
+            }
         }
         return result
+    }
+
+    /**
+     * Ensures [AppPreferences.serverDeviceId] is set using [MyDevicesApi.getDeviceByMac]
+     * when it is still 0 (matches admin `SendRebootCall?deviceId=` / SignalR AddDeviceId).
+     */
+    suspend fun ensureServerDeviceIdFromLookup(): Boolean {
+        val existing = appPrefs.serverDeviceId.first()
+        if (existing > 0) return true
+        val mac = getStableDeviceId()
+        if (mac.isBlank()) return false
+        return when (val res = safeApiCall { api.getDeviceByMac(mac) }) {
+            is NetworkResult.Success -> {
+                val id = res.data.id
+                if (id > 0) {
+                    appPrefs.setServerDeviceId(id)
+                    Log.i(TAG, "serverDeviceId set from GetByMAC: id=$id mac=$mac")
+                    true
+                } else {
+                    Log.w(TAG, "GetByMAC returned id=0 for mac=$mac")
+                    false
+                }
+            }
+            is NetworkResult.Error -> {
+                Log.w(TAG, "GetByMAC failed: ${res.message}")
+                false
+            }
+            is NetworkResult.NoInternet -> false
+            is NetworkResult.Loading -> false
+        }
     }
 
     /** Fetch remote configuration flags from server */
