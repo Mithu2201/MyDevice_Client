@@ -111,7 +111,7 @@ class KioskViewModel(
                             id = dto.id,
                             packageName = dto.packageName,
                             appName = dto.label ?: dto.title ?: dto.packageName,
-                            iconUrl = dto.icon,
+                            iconUrl = kioskRepo.getIconUrl(dto.icon),
                             label = dto.label,
                             autoLaunch = dto.autoLaunch
                         )
