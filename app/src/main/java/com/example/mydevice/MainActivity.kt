@@ -44,7 +44,6 @@ import com.example.mydevice.data.repository.MessageRepository
 import com.example.mydevice.service.device.DevicePolicyHelper
 import com.example.mydevice.service.device.EmdkRebootHelper
 import com.example.mydevice.service.device.EmdkWifiProfileHelper
-import com.example.mydevice.service.script.RemoteScriptExecutor
 import com.example.mydevice.service.worker.ConfigFileDownloadWorker
 import com.example.mydevice.service.worker.ScriptSyncWorker
 import com.example.mydevice.ui.navigation.AppNavigation
@@ -84,7 +83,6 @@ class MainActivity : ComponentActivity() {
     private var deviceRepo: DeviceRepository? = null
     private var messageRepo: MessageRepository? = null
     private var appPrefs: AppPreferences? = null
-    private var remoteScriptExecutor: RemoteScriptExecutor? = null
     lateinit var dpmHelper: DevicePolicyHelper
         private set
 
@@ -249,7 +247,6 @@ class MainActivity : ComponentActivity() {
             deviceRepo = try { koin.get(DeviceRepository::class) } catch (_: Exception) { null }
             messageRepo = try { koin.get(MessageRepository::class) } catch (_: Exception) { null }
             appPrefs = try { koin.get(AppPreferences::class) } catch (_: Exception) { null }
-            remoteScriptExecutor = try { koin.get(RemoteScriptExecutor::class) } catch (_: Exception) { null }
         } catch (e: Exception) {
             Log.w(TAG, "Error resolving Koin dependencies", e)
         }
@@ -268,6 +265,12 @@ class MainActivity : ComponentActivity() {
                     }
                     ensureMessageObserver()
                     ensurePeriodicMessageSync()
+
+                    try {
+                        deviceRepo?.ensureServerDeviceIdFromLookup()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "ensureServerDeviceIdFromLookup failed", e)
+                    }
 
                     val registrationId = resolveSignalRRegistrationId()
                     if (registrationId.isNotBlank() && hubConnection?.isConnected() != true) {
@@ -480,11 +483,6 @@ class MainActivity : ComponentActivity() {
             try {
                 val conn = hubConnection ?: return@launch
                 conn.xmlCommand.collect { xml ->
-                    try {
-                        remoteScriptExecutor?.executeScript(xml)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error executing remote script payload", e)
-                    }
                     Log.i(TAG, "SignalR XML command (${xml.length} chars), triggering data sync")
                     scope.launch {
                         try {
